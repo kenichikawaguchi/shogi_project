@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>将棋盤（座標＆動ける位置表示）</title>
+  <style>
+    canvas {
+      border: 1px solid #000;
+      display: block;
+      margin: 0 auto;
+    }
+    #info, #turnInfo, .hand {
+      margin-top: 10px;
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+    . hand {
+      border: 1px solid #333;
+      padding: 5px;
+      width: 400px;
+      margin: 10px auto;
+    }
+  </style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/eruda/1.4.3/eruda.min.js"></script>
+<script>eruda.init();</script>
+  <h1 style="text-align:center;">将棋盤</h1>
+  <!-- 現在の手番表示エリア -->
+  <div id="turnInfo"></div>
+
+  <!-- 持ち駒表示エリア：後手（gote） -->
+  <div id="handGote" class="hand"></div>
+  <!-- 左上に余白を確保するため、余白付きのCanvas -->
+  <canvas id="boardCanvas" width="550" height="500"></canvas>
+  <!-- 持ち駒表示エリア：先手（sente） -->
+  <div id="handSente" class="hand"></div>
+  <div id="info"></div>
+  
+  <script>
+    function getCookie(cookieName) {
+      let name = cookieName + "=";
+      let decodedCookie = decodeURIComponent(document.cookie);
+      let cookieArray = decodedCookie.split(';');
+      for(let i = 0; i < cookieArray.length; i++) {
+          let cookie = cookieArray[i].trim();
+          if (cookie.indexOf(name) == 0) {
+              return cookie.substring(name.length, cookie.length);
+          }
+      }
+      return null;
+    }
+
+    const BOARD_SIZE = 9;
+    const CELL_SIZE = 50;
+    const MARGIN = 40; // 座標目盛りのための余白
+    const canvas = document.getElementById("boardCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // サンプル盤面（表示用）：各セルは null または {player, piece_type, is_promoted} のオブジェクト
+    const board = JSON.parse('{{ sample_board_json|escapejs }}');
+    const piecesInHand = JSON.parse('{{ pieces_in_hand_json|escapejs }}');
+    const matchId = '{{ match_id }}';
+    let turn = '{{ turn }}'; // 現在の手番（"sente" または "gote"）
+    // 現在のユーザーのプレイヤー側は board_view の際にサーバーで決定するか、クライアント側で判定する
+    // ここでは currentPlayer として使います（例: ログインユーザーに応じて "sente" または "gote" を設定）
+    const currentPlayer = '{{ current_player|default:"sente" }}';
+
+
+    let selectedCell = null;
+    let validMoves = [];
+    let selectedPieceFromHand = null;
+    let selectedPlayerFromHand = null;
+
+    const pieceDisplay = {
+      pawn: { false: "歩", true: "と" },
+      lance: { false: "香", true: "成香" },
+      knight: { false: "桂", true: "成桂" },
+      silver: { false: "銀", true: "成銀" },
+      bishop: { false: "角", true: "馬" },
+      rook: { false: "飛", true: "龍" },
+      gold: "金",
+      king: "玉"
+    };
+
+    const getYoko = [
+      "９",
+      "８",
+      "７",
+      "６",
+      "５",
+      "４",
+      "３",
+      "２",
+      "１",
+    ];
+
+    const getTate = [
+      "一",
+      "二",
+      "三",
+      "四",
+      "五",
+      "六",
+      "七",
+      "八",
+      "九",
+    ];
+
+    function getPieceText(cell) {
+      // cell は {player, piece_type, is_promoted} の形式
+      const type = cell.piece_type;
+      if (type === "pawn" || type === "lance" || type === "knight" ||
+          type === "silver" || type === "bishop" || type === "rook") {
+        return pieceDisplay[type][cell.is_promoted];
+      } else if (type === "gold" || type === "king") {
+        return pieceDisplay[type];
+      } else {
+        return "";
+      }
+    }
+
+    // 現在の手番を表示
+    function displayTurn() {
+      const turnDiv = document.getElementById("turnInfo");
+      let turnText = turn === "sente" ? "先手の番" : "後手の番";
+      turnDiv.innerText = "手番: " + turnText;
+    }
+
+    // 持ち駒情報（例: { "sente": {"pawn": 2, "lance": 1, ...}, "gote": {"pawn": 1, ...} }）をHTMLに表示する関数
+    function displayPiecesInHand() {
+      const handSenteDiv = document.getElementById("handSente");
+      const handGoteDiv = document.getElementById("handGote");
+      handSenteDiv.innerHTML = "";
+      handGoteDiv.innerHTML = "";
+
+      function createHandPiece(pieceType, count, player) {
+        if (count > 0) {
+          const pieceElement = document.createElement("div");
+          pieceElement.innerText = pieceDisplay[pieceType][false]; // 持ち駒は通常未成状態で表示
+          pieceElement.classList.add("hand-piece");
+          if (selectedPieceFromHand === pieceType && selectedPlayerFromHand === player) {
+            pieceElement.classList.add("selected");
+          }
+          pieceElement.onclick = () => {
+            if (selectedPieceFromHand === pieceType && selectedPlayerFromHand === player) {
+              selectedPieceFromHand = null;
+              selectedPlayerFromHand = null;
+            } else {
+              selectedPieceFromHand = pieceType;
+              selectedPlayerFromHand = player;
+            }
+            displayPiecesInHand();
+          };
+          pieceElement.innerText += ` (${count})`;
+          return pieceElement;
+        }
+        return null;
+      }
+
+      // 表示（各プレイヤーの持ち駒は持ち駒情報がオブジェクトとして格納されている前提）
+      for (const [pieceType, count] of Object.entries(piecesInHand.sente || {})) {
+        const elem = createHandPiece(pieceType, count, "sente");
+        if (elem) handSenteDiv.appendChild(elem);
+      }
+      for (const [pieceType, count] of Object.entries(piecesInHand.gote || {})) {
+        const elem = createHandPiece(pieceType, count, "gote");
+        if (elem) handGoteDiv.appendChild(elem);
+      }
+    }
+
+
+    function drawBoard() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // 盤面セルの描画
+      for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+          const x = MARGIN + c * CELL_SIZE;
+          const y = MARGIN + r * CELL_SIZE;
+          let fontColor = "black";
+          // 有効移動先なら黄色、通常は白
+          if (selectedCell && selectedCell[0] === r && selectedCell[1] === c) {
+            ctx.fillStyle = "blue";
+            fontColor = "white";
+          } else if (validMoves.some(move => move[0] === r && move[1] === c)) {
+            ctx.fillStyle = "yellow";
+          } else {
+            ctx.fillStyle = "white";
+          }
+          ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+          ctx.strokeStyle = "black";
+          ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+
+          // 駒がある場合、駒の種類の先頭文字で表示（senteは大文字、goteは小文字）
+          const cell = board[r][c];
+          if (cell !== null) {
+            ctx.font = "20px Arial";
+            ctx.fillStyle = fontColor;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            if (cell.player == "gote") {
+              ctx.save();
+              const centerX = x + CELL_SIZE/2;
+              const centerY = y + CELL_SIZE/2;
+              ctx.translate(centerX, centerY);
+              ctx.rotate(Math.PI);
+              ctx.fillText(getPieceText(cell), 0, 0);
+              ctx.restore();
+            } else {
+              ctx.fillText(getPieceText(cell), x + CELL_SIZE / 2, y + CELL_SIZE / 2);
+            }
+          }
+        }
+      }
+      
+      // 座標目盛りの描画
+      ctx.font = "16px Arial";
+      ctx.fillStyle = "black";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // 上側（列番号 1～9）
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        const x = MARGIN + c * CELL_SIZE + CELL_SIZE / 2;
+        const y = MARGIN / 2;
+        ctx.fillText(getYoko[c], x, y);
+      }
+      // 左側（行番号 1～9、右寄せ）
+      ctx.textAlign = "right";
+      for (let r = 0; r < BOARD_SIZE; r++) {
+        const x = MARGIN / 2 + 10;
+        const y = MARGIN + r * CELL_SIZE + CELL_SIZE / 2;
+        ctx.fillText(getTate[r], x, y);
+      }
+    }
+
+    // クリックされたセルの駒情報をサーバーへ送信して有効移動先を取得する関数
+    function fetchValidMoves(row, col, cell) {
+      const params = new URLSearchParams({
+        row: row,
+        col: col,
+        piece_type: cell.piece_type,
+        player: cell.player,
+        is_promoted: cell.is_promoted ? "1" : "0",
+        match_id: matchId
+      });
+      fetch(`/api/get_moves/?${params.toString()}`)
+        .then(response => response.json())
+        .then(data => {
+          validMoves = data.moves;
+          document.getElementById("info").innerText =
+            `${cell.piece_type} (${cell.player}) の有効移動先: ${JSON.stringify(validMoves)}`;
+          drawBoard();
+        })
+        .catch(err => {
+          console.error(err);
+          document.getElementById("info").innerText = "有効移動先の取得に失敗しました。";
+        });
+    }
+
+    function movePiece(destRow, destCol) {
+      if (!selectedCell) return;
+      const [srcRow, srcCol] = selectedCell;
+      // 移動要求のデータ
+      const data = {
+        match_id: matchId,
+        src_row: srcRow,
+        src_col: srcCol,
+        dest_row: destRow,
+        dest_col: destCol
+      };
+
+      fetch('/api/move_piece/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCookie('csrftoken')  // CSRFトークンの取得関数を用意してください
+        },
+        body: JSON.stringify(data)
+      })
+      .then(response => response.json())
+      .then(result => {
+        if (result.error) {
+          document.getElementById("info").innerText = "移動に失敗しました: " + result.error;
+        } else {
+          // サーバー側で更新された盤面情報で board を更新
+          board.splice(0, board.length, ...result.board);
+          document.getElementById("info").innerText = "駒が移動しました。";
+          selectedCell = null;
+          validMoves = [];
+          drawBoard();
+          // 持ち駒情報も更新される場合は piecesInHand を更新
+          if (result.pieces_in_hand) {
+            // 例: 更新された持ち駒情報で再表示
+            piecesInHand.sente = result.pieces_in_hand.sente;
+            piecesInHand.gote = result.pieces_in_hand.gote;
+            displayPiecesInHand();
+          }
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById("info").innerText = "移動要求の送信に失敗しました。";
+      });
+    }
+
+    function dropPiece(pieceType, destRow, destCol) {
+      const data = {
+        match_id: matchId,
+        piece_type: pieceType,
+        player: currentPlayer,  // 現在のプレイヤーを示す変数（例："sente" または "gote"）
+        dest_row: destRow,
+        dest_col: destCol
+      };
+
+      fetch('/matches/drop_piece/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCookie('csrftoken')
+        },
+        body: JSON.stringify(data)
+      })
+      .then(response => response.json())
+      .then(result => {
+        if (result.error) {
+          document.getElementById("info").innerText = "ドロップに失敗しました: " + result.error;
+        } else {
+          board.splice(0, board.length, ...result.board);
+          document.getElementById("info").innerText = "持ち駒から打ちました。";
+          // 持ち駒情報の更新があれば更新
+          if (result.pieces_in_hand) {
+            //piecesInHand.sente = result.pieces_in_hand.sente;
+            //piecesInHand.gote = result.pieces_in_hand.gote;
+            Object.assign(piecesInHand, result.pieces_in_hand);
+            displayPiecesInHand();
+          }
+          drawBoard();
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById("info").innerText = "ドロップ要求の送信に失敗しました。";
+      });
+    }
+
+  function displayPiecesInHand() {
+      const senteHand = document.getElementById("handSente");
+      const goteHand = document.getElementById("handGote");
+      senteHand.innerHTML = "";
+      goteHand.innerHTML = "";
+
+      function createHandPiece(pieceType, count, player) {
+          if (count > 0) {
+              const pieceElement = document.createElement("div");
+              pieceElement.innerText = pieceDisplay[pieceType][false] || pieceDisplay[pieceType]; // 駒の表示
+              pieceElement.classList.add("hand-piece");
+              if (selectedPieceFromHand === pieceType && selectedPlayer === player) {
+                  pieceElement.classList.add("selected");
+              }
+              pieceElement.onclick = () => {
+                  if (selectedPieceFromHand === pieceType && selectedPlayer === player) {
+                      selectedPieceFromHand = null; // クリックで選択解除
+                      selectedPlayer = null;
+                  } else {
+                      selectedPieceFromHand = pieceType; // 選択
+                      selectedPlayer = player;
+                  }
+                  displayPiecesInHand();
+              };
+
+              pieceElement.setAttribute("data-piece", pieceType);
+              pieceElement.setAttribute("data-player", player);
+              pieceElement.setAttribute("data-count", count);
+              pieceElement.innerText += ` (${count})`; // 持ち駒の個数表示
+              return pieceElement;
+          }
+          return null;
+      }
+
+      Object.entries(piecesInHand.sente).forEach(([pieceType, count]) => {
+          const pieceElement = createHandPiece(pieceType, count, "sente");
+          if (pieceElement) senteHand.appendChild(pieceElement);
+      });
+
+      Object.entries(piecesInHand.gote).forEach(([pieceType, count]) => {
+          const pieceElement = createHandPiece(pieceType, count, "gote");
+          if (pieceElement) goteHand.appendChild(pieceElement);
+      });
+  }
+
+  function handleBoardClick(row, col) {
+      if (selectedPieceFromHand) {
+          dropPiece(selectedPieceFromHand, row, col); // 持ち駒を打つ
+          selectedPieceFromHand = null;
+          selectedPlayer = null;
+          displayPiecesInHand();
+      } else if (board[row][col] && board[row][col].player === currentPlayer) {
+          selectPiece(row, col); // 通常の駒選択
+      }
+  }
+
+  canvas.addEventListener("click", function(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const col = Math.floor((x - MARGIN) / CELL_SIZE);
+    const row = Math.floor((y - MARGIN) / CELL_SIZE);
+    if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+
+    // もし持ち駒が選択されている場合
+    if (selectedPieceFromHand) {
+      if (board[row][col] === null) {
+        // 盤面の空セルならドロップ（持ち駒を打つ）
+        dropPiece(selectedPieceFromHand, row, col);
+        selectedPieceFromHand = null;  // 選択解除
+      } else {
+        // 空でない場合は、持ち駒選択を解除する
+        selectedPieceFromHand = null;
+      }
+      drawBoard();
+      return;
+    }
+
+    // 盤面の駒選択処理
+    const cell = board[row][col];
+    if (selectedCell) {
+      // すでに盤面上で駒が選択されている場合、クリックしたセルが有効移動先なら移動実行
+      const isValidDest = validMoves.some(move => move[0] === row && move[1] === col);
+      if (isValidDest) {
+        movePiece(row, col);
+        selectedCell = null;
+        validMoves = [];
+        drawBoard();
+        return;
+      } else {
+        // クリックしたセルが有効移動先でない場合、
+        // 自分の駒があるセルなら選択を切り替え、有効移動先を再取得
+        if (cell && cell.player === currentPlayer) {
+          selectedCell = [row, col];
+          fetchValidMoves(row, col, cell);
+        } else {
+          // それ以外なら選択解除
+          selectedCell = null;
+          validMoves = [];
+          drawBoard();
+        }
+        return;
+      }
+    } else {
+      // まだ盤面上の駒が選択されていない場合
+      if (cell && cell.player === currentPlayer) {
+        selectedCell = [row, col];
+        fetchValidMoves(row, col, cell);
+      } else {
+        selectedCell = null;
+        validMoves = [];
+        drawBoard();
+      }
+    }
+  });
+
+    drawBoard();
+    displayPiecesInHand();
+    displayTurn();
+  </script>
+</body>
+</html>

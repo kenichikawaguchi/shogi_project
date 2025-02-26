@@ -1,0 +1,75 @@
+/* css/style.css */
+
+/* 全体のスタイル */
+body {
+    background-color: #f8f9fa;  /* 優しいグレーの背景 */
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    color: #333;
+}
+
+/* ヘッダーのスタイル */
+header {
+    background-color: #343a40;
+    color: #fff;
+    padding: 20px 0;
+    text-align: center;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 2rem;
+}
+
+/* ナビゲーションバーのスタイル（Bootstrapの上書き） */
+.navbar {
+    margin-bottom: 20px;
+}
+
+.navbar .nav-link {
+    color: #555;
+    transition: color 0.3s ease;
+}
+
+.navbar .nav-link:hover {
+    color: #007bff;
+}
+
+/* メインコンテンツのスタイル */
+main {
+    padding: 20px;
+}
+
+/* フッターのスタイル */
+footer {
+    background-color: #e9ecef;
+    color: #6c757d;
+    padding: 20px 0;
+    text-align: center;
+    font-size: 0.9rem;
+}
+
+/* レスポンシブ対応の追加カスタマイズ例 */
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 1.5rem;
+    }
+    main {
+        padding: 15px;
+    }
+}
+
+.hand-piece {
+    display: inline-block;
+    margin: 5px;
+    padding: 5px;
+    border: 1px solid black;
+    cursor: pointer;
+    background-color: lightgray;
+}
+
+.hand-piece.selected {
+    background-color: yellow;
+}
+
