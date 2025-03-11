@@ -1,9 +1,18 @@
-import json
+import json, copy
+import datetime
 from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
 from .models import Match, GameState
 from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_POST
+
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
+from django.db.models import Q
+
+from django.utils import timezone
 
 
 # 初期盤面状態を返す関数
@@ -69,18 +78,21 @@ def new_match(request):
     user = request.user
     match = Match.objects.create(
         player1=user,
-        player2=user,  # サンプル用。実際は適切な対戦相手に置き換えます。
-        result='ongoing'
+        player2=None,  # サンプル用。実際は適切な対戦相手に置き換えます。
+        result='waiting'
     )
     
     GameState.objects.create(
         match=match,
         board=initial_board(),
-        pieces_in_hand=initial_pieces_in_hand()
+        pieces_in_hand=initial_pieces_in_hand(),
+        turn='sente'
     )
     
     # 新規対局の盤面表示ページへリダイレクト（match_id を URL パラメータで渡す）
-    return redirect('board_view', match_id=match.id)
+    # return redirect('board_view', match_id=match.id)
+    broadcast_match_list_update(user)
+    return redirect('home')
 
 # ----- ゲームロジックの実装 -----
 
@@ -205,6 +217,61 @@ def get_valid_moves(piece_type, pos, player, board, is_promoted=False, board_siz
                     moves.append((new_row, new_col))
         return moves
 
+@require_POST
+@login_required
+def resign_match(request):
+    """
+    投了処理：
+    ログインユーザーが対局中の対局において投了した場合、
+    そのユーザーの対局は負けとし、勝者を決定する。
+    WebSocketを利用して、対局ルーム内の全クライアントに対局終了と勝者情報を通知する。
+    POSTパラメータ:
+      - match_id: 対局ID
+    """
+    try:
+        data = json.loads(request.body)
+        match_id = int(data.get('match_id'))
+    except Exception:
+        return JsonResponse({'error': 'パラメータが正しくありません。'}, status=400)
+
+    match = get_object_or_404(Match, id=match_id)
+
+    # 投了するユーザーが対局に参加しているか確認
+    if request.user != match.player1 and request.user != match.player2:
+        return JsonResponse({'error': 'あなたはこの対局に参加していません。'}, status=400)
+
+    # 投了したユーザーが player1（先手）なら、後手勝利；player2（後手）なら先手勝利
+    if request.user == match.player1:
+        winner = 'gote'
+        match.result = 'gote_win'
+    else:
+        winner = 'sente'
+        match.result = 'sente_win'
+
+    match.end_time = timezone.now()
+    match.save()
+
+    # WebSocketブロードキャスト
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"match_{match_id}",
+        {
+            "type": "game_update",
+            "message": {
+                "game_over": True,
+                "winner": winner,
+                "action": "resign",
+                "message": "投了が行われました。"
+            }
+        }
+    )
+
+    return JsonResponse({
+        "message": "投了しました。",
+        "winner": winner,
+        "game_over": True,
+    })
+
 # ----- Django View -----
 @require_GET
 def get_moves(request):
@@ -238,14 +305,31 @@ def get_moves(request):
 
 def board_view(request, match_id):
     game_state = get_object_or_404(GameState, match_id=match_id)
-    # 現在のユーザーが player1 なら先手、そうでなければ後手とする例
+    match = game_state.match
+    # 現在のユーザーがどちら側かを判定（例: player1 が先手）
+    current_player = "sente" if request.user == match.player1 else "gote"
     context = {
         'sample_board_json': json.dumps(game_state.board),
         'pieces_in_hand_json': json.dumps(game_state.pieces_in_hand),
         'match_id': match_id,
         'turn': game_state.turn,
+        'last_move': game_state.last_move,
+        'match': match,
+        'current_user': request.user,
+        'current_player': current_player,
     }
     return render(request, 'matches/board.html', context)
+
+
+# プロモーションゾーンの判定（9x9盤の場合）
+def is_in_promotion_zone(row, player):
+    if player == 'sente':
+        return row <= 2  # 0,1,2 行目
+    else:  # gote
+        return row >= 6  # 6,7,8 行目
+
+# 成り可能な駒の種類
+PROMOTABLE_PIECES = ['pawn', 'lance', 'knight', 'silver', 'bishop', 'rook']
 
 
 @require_POST
@@ -258,9 +342,13 @@ def move_piece(request):
       - src_col: 移動元の列（0-indexed）
       - dest_row: 移動先の行（0-indexed）
       - dest_col: 移動先の列（0-indexed）
+      - promote: オプション。成る場合は "1"、成らない場合は "0"。（対象駒がプロモーション可能な場合）
 
-    受け取った情報に基づき、GameState.board の状態を更新し、
-    更新後の盤面状態をJSONで返す。
+    対象駒がプロモーション可能かどうかは、
+    ・移動元または移動先が該当するプロモーションゾーンに入っているか
+    ・駒の種類が PROMOTABLE_PIECES に含まれるか
+    により判定する。
+    ユーザーの選択に応じて、駒の is_promoted を更新する。
     """
     try:
         data = json.loads(request.body)
@@ -269,47 +357,155 @@ def move_piece(request):
         src_col = int(data.get('src_col'))
         dest_row = int(data.get('dest_row'))
         dest_col = int(data.get('dest_col'))
+        # promote パラメータはオプション。文字列 "1" なら True、"0" なら False
+        promote_flag = data.get('promote')
+        if promote_flag is not None:
+            promote = promote_flag == "1"
+        else:
+            promote = False  # デフォルトは False（フロント側で選択済みと仮定）
     except Exception as e:
         return JsonResponse({'error': 'Invalid parameters'}, status=400)
 
     # 指定された match_id の GameState を取得
     game_state = get_object_or_404(GameState, match_id=match_id)
+    match = game_state.match
     board = game_state.board  # 盤面は 2次元リスト
+    moving_piece = board[src_row][src_col]
 
-    # 移動元に駒が存在するかチェック
-    piece = board[src_row][src_col]
-    if piece is None:
+    if moving_piece is None:
         return JsonResponse({'error': 'No piece at source'}, status=400)
 
     # 手番チェック: 移動しようとする駒のプレイヤーが現在の手番でなければエラー
-    if piece["player"] != game_state.turn:
+    if moving_piece["player"] != game_state.turn:
         return JsonResponse({'error': 'Not your turn'}, status=400)
 
-    # （必要ならここで有効移動先かどうかを追加チェック）
+    # プロモーション可能かどうかの判定
+    if moving_piece["piece_type"] in PROMOTABLE_PIECES:
+        if not moving_piece["is_promoted"]:
+            src_in_zone = is_in_promotion_zone(src_row, moving_piece["player"])
+            dest_in_zone = is_in_promotion_zone(dest_row, moving_piece["player"])
+            promotion_possible = src_in_zone or dest_in_zone
+        else:
+            promotion_possible = False
+    else:
+        promotion_possible = False
+
+    # ユーザーが promote パラメータを送信している場合、かつプロモーションが可能なら反映
+    if promotion_possible:
+        moving_piece["is_promoted"] = promote
+
+    # ここで、成るか否かの選択が可能な場合は promote_flag を利用する
+    if not moving_piece["is_promoted"]:
+        if moving_piece["piece_type"] == "pawn":
+            # 強制成り条件: 先手なら dest_row == 0、後手なら dest_row == 8
+            if (moving_piece["player"] == "sente" and dest_row == 0) or (moving_piece["player"] == "gote" and dest_row == 8):
+                moving_piece["is_promoted"] = True
+            else:
+                # 強制成りでない場合は、ユーザーの選択に委ねる
+                moving_piece["is_promoted"] = (promote_flag == "1")
+        elif moving_piece["piece_type"] == "lance":
+            if (moving_piece["player"] == "sente" and dest_row == 0) or (moving_piece["player"] == "gote" and dest_row == 8):
+                moving_piece["is_promoted"] = True
+            else:
+                moving_piece["is_promoted"] = (promote_flag == "1")
+        elif moving_piece["piece_type"] == "knight":
+            if (moving_piece["player"] == "sente" and (dest_row == 0 or dest_row == 1)) or (moving_piece["player"] == "gote" and (dest_row == 7 or dest_row == 8)):
+                moving_piece["is_promoted"] = True
+            else:
+                moving_piece["is_promoted"] = (promote_flag == "1")
+
+
+    # まず、移動をシミュレーションした盤面を作成
+    simulated_board = copy.deepcopy(board)
+    simulated_board[dest_row][dest_col] = moving_piece
+    simulated_board[src_row][src_col] = None
+
+    # シミュレーション後、自分の王がチェック状態になっているか判定
+    if is_in_check(simulated_board, moving_piece["player"]):
+        return JsonResponse({'error': 'その指し手は自分の王が捕獲されるため不正です。'}, status=400)
 
     # 敵駒があれば捕獲
     target_cell = board[dest_row][dest_col]
-    if target_cell is not None and target_cell["player"] != piece["player"]:
-        target_cell["is_promoted"] = False
-        captured_piece_type = target_cell["piece_type"]
-        capturing_player = piece["player"]
-        # 持ち駒は、game_state.pieces_in_hand で管理（例: {"sente": {"pawn": 2, ...}, "gote": {...}})
-        hand = game_state.pieces_in_hand.get(capturing_player, {})
-        hand[captured_piece_type] = hand.get(captured_piece_type, 0) + 1
-        game_state.pieces_in_hand[capturing_player] = hand
+    game_over = False
+    winner = None
 
-    board[dest_row][dest_col] = piece
+    if target_cell is not None and target_cell["player"] != moving_piece["player"]:
+        # もし相手の駒が王なら、捕獲して対局終了
+        if target_cell["piece_type"] == "king":
+            # 捕獲された王は、持ち駒に加えず、対局終了とする
+            winner = moving_piece["player"]
+            match.result = f"{winner}_win"
+            match.end_time = timezone.now()
+            match.save()
+            game_over = True
+        else:
+            # 王以外の場合は、捕獲処理を通常通り行う
+            target_cell["is_promoted"] = False
+            captured_piece_type = target_cell["piece_type"]
+            capturing_player = moving_piece["player"]
+            hand = game_state.pieces_in_hand.get(capturing_player, {})
+            hand[captured_piece_type] = hand.get(captured_piece_type, 0) + 1
+            game_state.pieces_in_hand[capturing_player] = hand
+
+    board[dest_row][dest_col] = moving_piece
     board[src_row][src_col] = None
 
     # 手番の交代: 先手なら後手、後手なら先手に
-    game_state.turn = 'gote' if game_state.turn == 'sente' else 'sente'
+    if not game_over:
+        game_state.turn = 'gote' if game_state.turn == 'sente' else 'sente'
 
-    # 更新した盤面状態を保存
+    # 詰み判定（ここでは簡易チェック関数 is_checkmate を使用）
+    # 例えば、現在の手番側の王が詰んでいる場合、その対局は終了するものとする
+    if is_checkmate(board, game_state.pieces_in_hand, game_state.turn, game_state.match):
+        game_over = True
+        # 手番が交代した直後なので、今打とうとしている側の次の手番が詰んでいるということは、
+        # 直前の手番（対局を指した側）が勝者となる
+        match = game_state.match
+        if not (match.result == "sente_win" or match.result == "gote_win"):
+            winner = 'sente' if game_state.turn == 'gote' else 'gote'
+            # 対局終了時刻を設定
+            match.end_time = datetime.datetime.now()
+            # 結果を更新（例: "sente_win" または "gote_win"）
+            match.result = f"{winner}_win"
+            match.save()
+
+    game_state.last_move = [dest_row, dest_col];
     game_state.board = board
     game_state.save()
 
-    return JsonResponse({'board': board, 'pieces_in_hand': game_state.pieces_in_hand})
+    # チャンネルレイヤーを取得し、グループにブロードキャスト
+    channel_layer = get_channel_layer()
+    print(f'channel_layer:  {channel_layer}')
+    async_to_sync(channel_layer.group_send)(
+        f'match_{match_id}',
+        {
+            'type': 'game_update',
+            'message': {
+                'board': board,
+                'pieces_in_hand': game_state.pieces_in_hand,
+                'turn': game_state.turn,
+                'game_over': game_over,
+                'winner': winner if game_over else None,
+                'last_move': game_state.last_move,
+                'action': 'move_piece'
+            }
+        }
+    )
 
+    response_data = {
+        'board': board,
+        'pieces_in_hand': game_state.pieces_in_hand,
+        'last_move': game_state.last_move,
+        'turn': game_state.turn
+    }
+
+    if game_over:
+        response_data['game_over'] = True
+        response_data['winner'] = winner
+    else:
+        response_data['game_over'] = False
+
+    return JsonResponse(response_data)
 
 @require_POST
 @login_required
@@ -326,6 +522,8 @@ def drop_piece(request):
 
     ・移動先セルが空であることを確認
     ・プレイヤーの持ち駒情報に該当駒があることを確認
+    ・歩の場合、同じ列に未成の歩があれば二歩禁止により打てない
+    ・歩、香車、桂馬の場合、ドロップ先が打てない位置（必ず前方に進む駒の打てない段）であればエラーを返す
     ・持ち駒から1個減らし、盤面に駒（未成状態）を配置
     ・更新後の盤面状態と持ち駒情報をJSONで返す
     """
@@ -352,6 +550,47 @@ def drop_piece(request):
     if hand.get(piece_type, 0) <= 0:
         return JsonResponse({'error': 'No such piece in hand'}, status=400)
 
+    # 二歩禁止チェック：歩の場合、同じ列に既に未成の歩があるかをチェック
+    if piece_type == "pawn":
+        for r in range(len(board)):
+            cell = board[r][dest_col]
+            if cell is not None and cell["player"] == player and cell["piece_type"] == "pawn" and not cell["is_promoted"]:
+                return JsonResponse({'error': '二歩は禁止されています。'}, status=400)
+        # 打ち歩詰め禁止のチェック：歩を打った場合の盤面をシミュレーションし、相手の玉が詰むかどうかを判定
+        simulated_board = copy.deepcopy(board)
+        simulated_board[dest_row][dest_col] = {
+            "player": player,
+            "piece_type": "pawn",
+            "is_promoted": False
+        }
+        opponent = "gote" if player == "sente" else "sente"
+        # ここで、相手側の詰み判定を行う
+        if is_checkmate(simulated_board, game_state.pieces_in_hand, opponent):
+            return JsonResponse({'error': '打ち歩詰めは禁止されています。'}, status=400)
+    # --- ここまで打ち歩詰めチェック ---
+
+    # 駒の打てる位置の制限
+    # 先手は盤面上部（行0に打てない）、後手は盤面下部（行8に打てない）
+    if piece_type in ("pawn", "lance"):
+        if player == "sente" and dest_row == 0:
+            return JsonResponse({'error': f"歩や香車は最上段には打てません。"}, status=400)
+        elif player == "gote" and dest_row == 8:
+            return JsonResponse({'error': f"歩や香車は最上段には打てません。"}, status=400)
+    elif piece_type == "knight":
+        if player == "sente" and (dest_row == 0 or dest_row == 1):
+            return JsonResponse({'error': "桂馬は最上段およびその下段には打てません。"}, status=400)
+        elif player == "gote" and (dest_row == 7 or dest_row == 8):
+            return JsonResponse({'error': "桂馬は最上段およびその下段には打てません。"}, status=400)
+
+    # まず、移動をシミュレーションした盤面を作成
+    simulated_board = copy.deepcopy(board)
+    simulated_board[dest_row][dest_col] = moving_piece
+    simulated_board[src_row][src_col] = None
+
+    # シミュレーション後、自分の王がチェック状態になっているか判定
+    if is_in_check(simulated_board, moving_piece["player"]):
+        return JsonResponse({'error': 'その指し手は自分の王が捕獲されるため不正です。'}, status=400)
+
     # 持ち駒から該当駒を1個減らす
     hand[piece_type] -= 1
     if hand[piece_type] <= 0:
@@ -365,11 +604,209 @@ def drop_piece(request):
         "is_promoted": False
     }
 
+    # 手番の交代: 先手なら後手、後手なら先手に
+    game_state.turn = 'gote' if game_state.turn == 'sente' else 'sente'
+
+    # 詰み判定（ここでは簡易チェック関数 is_checkmate を使用）
+    # 例えば、現在の手番側の王が詰んでいる場合、その対局は終了するものとする
+    game_over = False
+    winner = None
+    if is_checkmate(board, game_state.pieces_in_hand, game_state.turn, game_state.match):
+        game_over = True
+        # 手番が交代した直後なので、今打とうとしている側の次の手番が詰んでいるということは、
+        # 直前の手番（対局を指した側）が勝者となる
+        winner = 'sente' if game_state.turn == 'gote' else 'gote'
+        match = game_state.match
+        # 対局終了時刻を設定
+        match.end_time = datetime.datetime.now()
+        # 結果を更新（例: "sente_win" または "gote_win"）
+        match.result = f"{winner}_win"
+        match.save()
+
+    game_state.last_move = [dest_row, dest_col];
     game_state.board = board
     game_state.save()
 
-    return JsonResponse({
+    response_data = {
         'board': board,
-        'pieces_in_hand': game_state.pieces_in_hand
-    })
+        'pieces_in_hand': game_state.pieces_in_hand,
+        'last_move': game_state.last_move,
+        'turn': game_state.turn
+    }
+
+    if game_over:
+        response_data['game_over'] = True
+        response_data['winner'] = winner
+    else:
+        response_data['game_over'] = False
+
+    # チャンネルレイヤーを取得し、グループにブロードキャスト
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f'match_{match_id}',
+        {
+            'type': 'game_update',
+            'message': {
+                'board': board,
+                'pieces_in_hand': game_state.pieces_in_hand,
+                'turn': game_state.turn,
+                'winner': winner if game_over else None,
+                'last_move': game_state.last_move,
+                'action': 'move_piece'
+            }
+        }
+    )
+
+    return JsonResponse(response_data)
+
+
+import copy
+
+def is_in_check(board, player):
+    """
+    指定された盤面(board)において、player側の王が敵の駒の攻撃範囲にあるかを判定する。
+    敵のすべての駒について、get_valid_moves() を用いて王の位置が攻撃可能かどうかをチェックする。
+    """
+    rows = len(board)
+    cols = len(board[0]) if rows > 0 else 0
+    king_pos = None
+    for r in range(rows):
+        for c in range(cols):
+            cell = board[r][c]
+            if cell is not None and cell["player"] == player and cell["piece_type"] == "king":
+                king_pos = (r, c)
+                break
+        if king_pos is not None:
+            break
+    # 王が見つからなければチェック状態と判断
+    if king_pos is None:
+        return True
+    print(king_pos)
+
+    enemy = "gote" if player == "sente" else "sente"
+    for r in range(rows):
+        for c in range(cols):
+            cell = board[r][c]
+            if cell is not None and cell["player"] == enemy:
+                moves = get_valid_moves(cell["piece_type"], (r, c), enemy, board, cell.get("is_promoted", False), board_size=rows)
+                if king_pos in moves:
+                    return True
+    return False
+
+def is_checkmate(board, pieces_in_hand, player, match):
+    """
+    盤面(board)と持ち駒(pieces_in_hand)に基づいて、player側がどの手を打っても王を守れない場合 True を返す。
+    1. まず現在の盤面で王がチェック状態か確認。
+    2. 自分の盤上のすべての駒について、各合法手をシミュレーションしてチェックが回避できるか確認。
+    3. 持ち駒からの打ち駒についても、盤上の空セルすべてでシミュレーションし、チェック回避が可能か確認。
+    どちらの手段でも回避できる手があれば詰みではないと判断する。
+    """
+
+    if match.result == "sente_win" or match.result == "gote_win":
+        return True
+
+    rows = len(board)
+    cols = len(board[0]) if rows > 0 else 0
+
+    # まず、現盤面でチェック状態でなければ詰みではない
+    if not is_in_check(board, player):
+        return False
+
+    # 1. 盤上の駒の移動を全てシミュレーション
+    for r in range(rows):
+        for c in range(cols):
+            cell = board[r][c]
+            if cell is not None and cell["player"] == player:
+                moves = get_valid_moves(cell["piece_type"], (r, c), player, board, cell.get("is_promoted", False), board_size=rows)
+                for move in moves:
+                    new_board = copy.deepcopy(board)
+                    # シミュレーション：移動を適用
+                    new_board[move[0]][move[1]] = new_board[r][c]
+                    new_board[r][c] = None
+                    if not is_in_check(new_board, player):
+                        return False
+
+    # 2. 持ち駒の打ち駒のシミュレーション
+    # 持ち駒情報は、例えば {"sente": {"pawn": 2, ...}, "gote": {...}} の形式
+    hand = pieces_in_hand.get(player, {})
+    for piece_type, count in hand.items():
+        if count <= 0:
+            continue
+        # 各空セルについて打ち駒を試す
+        for r in range(rows):
+            for c in range(cols):
+                if board[r][c] is not None:
+                    continue
+                # ドロップ制限：例えば歩は二歩、最終段の打ちなどは既に検証されていると仮定
+                # ここで必要なら、drop_move の合法性チェックを追加する
+                new_board = copy.deepcopy(board)
+                new_board[r][c] = {"player": player, "piece_type": piece_type, "is_promoted": False}
+                if not is_in_check(new_board, player):
+                    return False
+
+    # どの合法手もチェック回避できなければ詰み
+    return True
+
+
+def home(request):
+    """
+    トップページ（ホーム）ビュー
+    待機中の対局ルーム（result='waiting'）の一覧を取得して表示する。
+    """
+    waiting_matches = Match.objects.filter(result='waiting').order_by('-start_time')
+    my_matches = []
+    if request.user.is_authenticated:
+        my_matches = Match.objects.filter(result='ongoing').filter(Q(player1=request.user) | Q(player2=request.user)).order_by('-start_time')
+    context = {
+        'waiting_matches': waiting_matches,
+        'my_matches': my_matches,
+    }
+    return render(request, 'home.html', context)
+
+
+@login_required
+def join_match(request, match_id):
+    """
+    待機中の対局ルームに後手として参加する。
+    """
+    match = get_object_or_404(Match, id=match_id, player2__isnull=True)
+    match.player2 = request.user
+    match.result = 'ongoing'
+    match.save()
+    broadcast_match_list_update(request.user)
+    return redirect('board_view', match_id=match.id)
+
+
+def broadcast_match_list_update(user):
+    """
+    現在の待機中対局ルームと、ログインユーザーの対局一覧をシリアライズして、
+    WebSocket の "match_list" グループに更新メッセージを送信する。
+    """
+    waiting_matches_qs = Match.objects.filter(result='waiting').order_by('-start_time')
+    my_matches_qs = Match.objects.filter(result='ongoing').filter(Q(player1=user) | Q(player2=user)).order_by('-start_time')
+
+    def serialize_match(match):
+        return {
+            'id': match.id,
+            'player1': {'username': match.player1.username, 'id': match.player1.id},
+            'player2': {'username': match.player2.username, 'id': match.player2.id} if match.player2 else None,
+            'start_time': match.start_time.isoformat(),
+            'result': match.result,
+        }
+
+    data = {
+        'my_matches': [serialize_match(m) for m in my_matches_qs],
+        'waiting_matches': [serialize_match(m) for m in waiting_matches_qs],
+    }
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        "match_list",
+        {
+            'type': 'send_update',
+            # 'message': data,
+            'message': {
+                "action": "reload"
+            }
+        }
+    )
 

@@ -4,4 +4,151 @@
 {% block content %}
     <h1>ようこそ {{ user.username }} さん！</h1>
     <p><a href="{% url 'account_logout' %}">ログアウト</a></p>
+  <div class="container mt-4">
+    <div class="text-center">
+      <h1>将棋オンラインへようこそ！</h1>
+      <p>対局相手とリアルタイムで将棋を楽しみましょう。</p>
+      <!-- 対局開始ボタン。クリックすると new_match ビューへリダイレクト -->
+      {% if user.is_authenticated %}
+        <a href="{% url 'new_match' %}" class="btn btn-primary btn-lg">対局を開始する</a>
+      {% else %}
+        <a href="#" class="btn btn-primary btn-lg disabled" tabindex="-1" aria-disabled="true">対局を開始する</a>
+      {% endif %}
+    </div>
+
+    <div class="row">
+      <div class="col-md-12">
+        <h2>あなたの対局一覧</h2>
+        <div id="myMatchesList" class="list-group">
+          {% if my_matches %}
+            {% for match in my_matches %}
+              <a href="{% url 'board_view' match.id %}" class="list-group-item list-group-item-action">
+                <div class="d-flex w-100 justify-content-between">
+                  <h5 class="mb-1">
+                    対局ID: {{ match.id }}<br>
+                    先手: {{ match.player1.username }}{% if match.player1.id == user.id %} (あなた){% endif %}
+                    &nbsp;/&nbsp;
+                    後手: {% if match.player2 %}{{ match.player2.username }}{% if match.player2.id == user.id %} (あなた){% endif %}{% else %}未割当{% endif %}
+                  </h5>
+                  <small>{{ match.start_time|date:"Y-m-d H:i" }}</small>
+                </div>
+                <p class="mb-1">状態: {{ match.result }}</p>
+              </a>
+            {% endfor %}
+          {% else %}
+            <p class="text-center">あなたの対局はありません。</p>
+          {% endif %}
+        </div>
+      </div>
+
+    <div class="mt-4">
+      <h2 class="text-center">後手割当待ちの対局ルーム一覧</h2>
+      <div id="waitingMatchesList" class="list-group">
+      {% if waiting_matches %}
+        <div class="list-group">
+          {% for match in waiting_matches %}
+            {% if user.is_authenticated %}
+              <a href="{% url 'join_match' match.id %}" class="list-group-item list-group-item-action">
+                <div class="d-flex w-100 justify-content-between">
+                  <h5 class="mb-1">
+                    対局ID: {{ match.id }}<br>
+                    先手: {{ match.player1.username }}{% if match.player1.id == user.id %} (あなた){% endif %}
+                    &nbsp;/&nbsp;
+                    後手: 未割当
+                  </h5>
+                  <small>{{ match.start_time|date:"Y-m-d H:i" }}</small>
+                </div>
+                <p class="mb-1">状態: 対局待機中</p>
+              </a>
+            {% else %}
+              <div class="list-group-item">
+                <div class="d-flex w-100 justify-content-between">
+                  <h5 class="mb-1">
+                    対局ID: {{ match.id }}<br>
+                    先手: {{ match.player1.username }}
+                    &nbsp;/&nbsp;
+                    後手: 未割当
+                  </h5>
+                  <small>{{ match.start_time|date:"Y-m-d H:i" }}</small>
+                </div>
+                <p class="mb-1">状態: 対局待機中</p>
+                <p class="text-muted">ログインすると対局に参加できます。</p>
+              </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="text-center">現在、後手割り当て待ちの対局はありません。</p>
+      {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- WebSocket接続によるリアルタイム更新 -->
+  <script>
+    const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+    // ここではホームページ全体の対局ルーム更新用に '/ws/match_list/' を利用
+    const matchListSocket = new WebSocket(wsScheme + '://' + window.location.host + '/ws/match_list/');
+
+    matchListSocket.onmessage = function(e) {
+      const data = JSON.parse(e.data);
+      if (data.action === "reload") {
+        location.reload();
+      } else {
+        updateMyMatches(data.my_matches);
+        updateWaitingMatches(data.waiting_matches);
+      }
+    };
+
+    matchListSocket.onclose = function(e) {
+      console.error("WebSocket connection closed unexpectedly.");
+    };
+
+    // 更新用関数（上記の updateMyMatches と updateWaitingMatches の実装例を参考に）
+    function updateMyMatches(myMatches) {
+      const myMatchesDiv = document.getElementById("myMatchesList");
+      if (myMatches.length === 0) {
+        myMatchesDiv.innerHTML = '<p class="text-center">現在、あなたの対局はありません。</p>';
+        return;
+      }
+      let html = '';
+      myMatches.forEach(match => {
+        const player1 = match.player1;
+        const player2 = match.player2 ? match.player2.username : "未割当";
+        const youTagP1 = (player1.id == {{ user.id }}) ? " (あなた)" : "";
+        const youTagP2 = (match.player2 && match.player2.id == {{ user.id }}) ? " (あなた)" : "";
+        html += `
+          <a href="/matches/board/${match.id}/" class="list-group-item list-group-item-action">
+            <div class="d-flex w-100 justify-content-between">
+              <h5 class="mb-1">対局ID: ${match.id}<br>先手: ${player1.username}${youTagP1} / 後手: ${player2}${youTagP2}</h5>
+              <small>${match.start_time.substring(0,16).replace('T',' ')}</small>
+            </div>
+            <p class="mb-1">状態: ${match.result}</p>
+          </a>
+        `;
+      });
+      myMatchesDiv.innerHTML = html;
+    }
+
+    function updateWaitingMatches(waitingMatches) {
+      const waitingDiv = document.getElementById("waitingMatchesList");
+      if (waitingMatches.length === 0) {
+        waitingDiv.innerHTML = '<p class="text-center">現在、待機中の対局ルームはありません。</p>';
+        return;
+      }
+      let html = '';
+      waitingMatches.forEach(match => {
+        html += `
+          <a href="/matches/join_match/${match.id}/" class="list-group-item list-group-item-action">
+            <div class="d-flex w-100 justify-content-between">
+              <h5 class="mb-1">対局ID: ${match.id}<br>先手: ${match.player1.username} / 後手: 未割当</h5>
+              <small>${match.start_time.substring(0,16).replace('T',' ')}</small>
+            </div>
+            <p class="mb-1">状態: 対局待機中</p>
+          </a>
+        `;
+      });
+      waitingDiv.innerHTML = html;
+    }
+  </script>
 {% endblock %}

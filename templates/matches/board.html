@@ -1,42 +1,111 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>将棋盤（座標＆動ける位置表示）</title>
-  <style>
-    canvas {
-      border: 1px solid #000;
-      display: block;
-      margin: 0 auto;
-    }
-    #info, #turnInfo, .hand {
-      margin-top: 10px;
-      font-family: Arial, sans-serif;
-      text-align: center;
-    }
-    . hand {
-      border: 1px solid #333;
-      padding: 5px;
-      width: 400px;
-      margin: 10px auto;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>将棋対局アプリ</title>
+  <!-- Bootstrap 5 CSS CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM" crossorigin="anonymous">
+  <!-- 独自のスタイルシート -->
+  <link rel="stylesheet" href="{% static 'css/style.css' %}">
+
 </head>
 <body>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/eruda/1.4.3/eruda.min.js"></script>
 <script>eruda.init();</script>
-  <h1 style="text-align:center;">将棋盤</h1>
-  <!-- 現在の手番表示エリア -->
-  <div id="turnInfo"></div>
+  <!-- レスポンシブなナビゲーションバー -->
+  <nav class="navbar navbar-expand-lg navbar-light bg-light">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">将棋対局アプリ</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+              data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent"
+              aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarSupportedContent">
+         <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+           <li class="nav-item">
+             <a class="nav-link active" aria-current="page" href="/">ホーム</a>
+           </li>
+           <li class="nav-item">
+             <a class="nav-link" href="/board/new/">対局開始</a>
+           </li>
+           <li class="nav-item">
+             <a class="nav-link" href="#">プロフィール</a>
+           </li>
+         </ul>
+         <span class="navbar-text">
+           ログインユーザー: {{ current_user.username }}
+         </span>
+      </div>
+    </div>
+  </nav>
 
-  <!-- 持ち駒表示エリア：後手（gote） -->
-  <div id="handGote" class="hand"></div>
-  <!-- 左上に余白を確保するため、余白付きのCanvas -->
-  <canvas id="boardCanvas" width="550" height="500"></canvas>
-  <!-- 持ち駒表示エリア：先手（sente） -->
-  <div id="handSente" class="hand"></div>
-  <div id="info"></div>
-  
+  <div class="container my-3">
+    <h1 class="text-center">対局ID: {{ match.id }}</h1>
+      <!-- 対局ID と 対局ステータスの表示 -->
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <h2>対局ID: {{ match.id }}</h2>
+          <p class="mb-0">先手: {{ match.player1.username }}</p>
+          <p class="mb-0">後手: {% if match.player2 %}{{ match.player2.username }}{% else %}未割当{% endif %}</p>
+        </div>
+        <div id="matchStatus">
+          <div class="alert alert-info mb-0">
+            対局状態: {{ match.result }}
+          </div>
+        </div>
+      </div>
+
+    <!-- 現在の手番表示エリア -->
+    <h2 id="turnInfo" class="mb-3"></h2>
+
+      <!-- 対局中のユーザー名表示 -->
+    <div id="playersInfo" class="mb-3">
+      {% if match.player2.id == current_user.id %}
+        <p>先手: {{ match.player1.username }}{% if match.player1.id == current_user.id %} (あなた){% endif %}</p>
+      {% else %}
+        <p>後手: {{ match.player2.username }}{% if match.player2.id == current_user.id %} (あなた){% endif %}</p>
+      {% endif %}
+    </div>
+    <!-- 持ち駒表示エリア：後手（gote） -->
+    <div id="handGote" class="hand mb-3"></div>
+    <!-- 左上に余白を確保するため、余白付きのCanvas -->
+    <canvas id="boardCanvas" width="530" height="530"></canvas>
+    <!-- 持ち駒表示エリア：先手（sente） -->
+    <div id="handSente" class="hand mb-3"></div>
+
+      <!-- 対局中のユーザー名表示 -->
+    <div id="playersInfo" class="mb-3">
+      {% if match.player2.id == current_user.id %}
+        <p>後手: {{ match.player2.username }}{% if match.player2.id == current_user.id %} (あなた){% endif %}</p>
+      {% else %}
+        <p>先手: {{ match.player1.username }}{% if match.player1.id == current_user.id %} (あなた){% endif %}</p>
+      {% endif %}
+    </div>
+
+<!-- 例: 対局画面の適切な位置に投了ボタンを追加 -->
+<div class="text-center my-3">
+  <button id="resignButton" class="btn btn-danger">投了</button>
+</div>
+
+    <!-- 操作情報表示 -->
+    <div id="info"></div>
+
+    <!-- 手番切り替え用のボタンと表示エリア -->
+    <div class="text-center my-3">
+      <button id="togglePlayerButton" class="btn btn-secondary">プレイヤー切り替え</button>
+      <span id="currentPlayerDisplay"></span>
+    </div>
+  </div>
+
+  <!-- Bootstrap 5 JS（必要に応じて） -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" 
+          integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz"
+          crossorigin="anonymous"></script>
+
   <script>
     function getCookie(cookieName) {
       let name = cookieName + "=";
@@ -57,15 +126,33 @@
     const canvas = document.getElementById("boardCanvas");
     const ctx = canvas.getContext("2d");
 
+    let gameOver = false; // 対局終了フラグ
+
     // サンプル盤面（表示用）：各セルは null または {player, piece_type, is_promoted} のオブジェクト
     const board = JSON.parse('{{ sample_board_json|escapejs }}');
     const piecesInHand = JSON.parse('{{ pieces_in_hand_json|escapejs }}');
+    let lastMove = JSON.parse('{{ last_move|escapejs }}');
     const matchId = '{{ match_id }}';
     let turn = '{{ turn }}'; // 現在の手番（"sente" または "gote"）
     // 現在のユーザーのプレイヤー側は board_view の際にサーバーで決定するか、クライアント側で判定する
     // ここでは currentPlayer として使います（例: ログインユーザーに応じて "sente" または "gote" を設定）
-    const currentPlayer = '{{ current_player|default:"sente" }}';
+    let currentPlayer = '{{ current_player|default:"sente" }}';
 
+ // 現在のプレイヤーを表示する関数
+  function updateCurrentPlayerDisplay() {
+    const displayDiv = document.getElementById("currentPlayerDisplay");
+    displayDiv.innerText = "現在のプレイヤー: " + (currentPlayer === "sente" ? "先手" : "後手");
+  }
+  document.getElementById("togglePlayerButton").addEventListener("click", function() {
+    currentPlayer = currentPlayer === "sente" ? "gote" : "sente";
+    updateCurrentPlayerDisplay();
+    drawBoard();
+    displayPiecesInHand();
+  });
+
+
+  // 初期表示更新
+  updateCurrentPlayerDisplay();
 
     let selectedCell = null;
     let validMoves = [];
@@ -129,20 +216,45 @@
 
     // 持ち駒情報（例: { "sente": {"pawn": 2, "lance": 1, ...}, "gote": {"pawn": 1, ...} }）をHTMLに表示する関数
     function displayPiecesInHand() {
-      const handSenteDiv = document.getElementById("handSente");
-      const handGoteDiv = document.getElementById("handGote");
-      handSenteDiv.innerHTML = "";
-      handGoteDiv.innerHTML = "";
+      const handTop = document.getElementById("handGote");
+      const handBottom = document.getElementById("handSente");
+
+      // currentPlayer に応じて、ヘッダーを設定
+      if (currentPlayer === "sente") {
+        handTop.innerHTML = "<h5>後手の持ち駒:</h5>";
+        handBottom.innerHTML = "<h5>先手の持ち駒:</h5>";
+      } else { // currentPlayer === "gote"
+        handTop.innerHTML = "<h5>先手の持ち駒:</h5>";
+        handBottom.innerHTML = "<h5>後手の持ち駒:</h5>";
+      }
 
       function createHandPiece(pieceType, count, player) {
         if (count > 0) {
           const pieceElement = document.createElement("div");
-          pieceElement.innerText = pieceDisplay[pieceType][false]; // 持ち駒は通常未成状態で表示
+          // 金と玉の場合は直接文字列を使用し、その他はプロモーションの状態に応じた表示とする
+          if (pieceType === "gold" || pieceType === "king") {
+            pieceElement.innerText = pieceDisplay[pieceType];
+          } else {
+            pieceElement.innerText = pieceDisplay[pieceType][false];
+          }
+
           pieceElement.classList.add("hand-piece");
           if (selectedPieceFromHand === pieceType && selectedPlayerFromHand === player) {
-            pieceElement.classList.add("selected");
+              pieceElement.classList.add("selected");
           }
+
+          // ここで、現在の手番（turn）と、持ち駒が所属するプレイヤーが一致しない場合は選択を無視
           pieceElement.onclick = () => {
+            if (turn !== player){
+              // 自分の手番でなければ、何もしない
+              return;
+            }
+
+            if (currentPlayer !== player){
+              // 自分の持ち駒でなければ、何もしない
+              return;
+            }
+
             if (selectedPieceFromHand === pieceType && selectedPlayerFromHand === player) {
               selectedPieceFromHand = null;
               selectedPlayerFromHand = null;
@@ -150,7 +262,11 @@
               selectedPieceFromHand = pieceType;
               selectedPlayerFromHand = player;
             }
+            // 持ち駒が選択された際、盤面上の選択状態と有効移動先をクリアする
+            selectedCell = null;
+            validMoves = [];
             displayPiecesInHand();
+            drawBoard();
           };
           pieceElement.innerText += ` (${count})`;
           return pieceElement;
@@ -158,21 +274,43 @@
         return null;
       }
 
-      // 表示（各プレイヤーの持ち駒は持ち駒情報がオブジェクトとして格納されている前提）
-      for (const [pieceType, count] of Object.entries(piecesInHand.sente || {})) {
-        const elem = createHandPiece(pieceType, count, "sente");
-        if (elem) handSenteDiv.appendChild(elem);
-      }
-      for (const [pieceType, count] of Object.entries(piecesInHand.gote || {})) {
-        const elem = createHandPiece(pieceType, count, "gote");
-        if (elem) handGoteDiv.appendChild(elem);
+      // 表示する持ち駒情報は、currentPlayer に応じて、上部に相手の持ち駒、下部に自分の持ち駒を表示する
+      if (currentPlayer === "sente") {
+        // 上部（handGote）：相手（gote）の持ち駒
+        for (const [pieceType, count] of Object.entries(piecesInHand.gote || {})) {
+          const elem = createHandPiece(pieceType, count, "gote");
+          if (elem) handTop.appendChild(elem);
+        }
+        // 下部（handSente）：自分（sente）の持ち駒
+        for (const [pieceType, count] of Object.entries(piecesInHand.sente || {})) {
+          const elem = createHandPiece(pieceType, count, "sente");
+          if (elem) handBottom.appendChild(elem);
+        }
+      } else { // currentPlayer === "gote"
+        // 上部（handGote）：相手（sente）の持ち駒
+        for (const [pieceType, count] of Object.entries(piecesInHand.sente || {})) {
+          const elem = createHandPiece(pieceType, count, "sente");
+          if (elem) handTop.appendChild(elem);
+        }
+        // 下部（handSente）：自分（gote）の持ち駒
+        for (const [pieceType, count] of Object.entries(piecesInHand.gote || {})) {
+          const elem = createHandPiece(pieceType, count, "gote");
+          if (elem) handBottom.appendChild(elem);
+        }
       }
     }
 
 
     function drawBoard() {
+      if (currentPlayer === "gote") {
+        ctx.save();
+        ctx.translate(canvas.width/2, canvas.height/2);
+        ctx.rotate(Math.PI);
+        ctx.translate(-canvas.width/2, -canvas.height/2);
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
+
       // 盤面セルの描画
       for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
@@ -180,7 +318,11 @@
           const y = MARGIN + r * CELL_SIZE;
           let fontColor = "black";
           // 有効移動先なら黄色、通常は白
-          if (selectedCell && selectedCell[0] === r && selectedCell[1] === c) {
+          console.log("lastmove");
+          console.log(lastMove);
+          if (lastMove && lastMove[0] === r && lastMove[1] === c ) {
+            ctx.fillStyle = "#d4edda";
+          } else if (selectedCell && selectedCell[0] === r && selectedCell[1] === c) {
             ctx.fillStyle = "blue";
             fontColor = "white";
           } else if (validMoves.some(move => move[0] === r && move[1] === c)) {
@@ -221,17 +363,43 @@
       ctx.textBaseline = "middle";
       // 上側（列番号 1～9）
       for (let c = 0; c < BOARD_SIZE; c++) {
-        const x = MARGIN + c * CELL_SIZE + CELL_SIZE / 2;
-        const y = MARGIN / 2;
-        ctx.fillText(getYoko[c], x, y);
+        if (currentPlayer == "gote") {
+          ctx.save();
+          const centerAX = MARGIN + c * CELL_SIZE + CELL_SIZE/2;
+          const centerAY = MARGIN * 3 / 2 + BOARD_SIZE * CELL_SIZE;
+          ctx.translate(centerAX, centerAY);
+          ctx.rotate(Math.PI);
+          ctx.fillText(getYoko[c], 0, 0);
+          ctx.restore();
+        } else {
+          const x = MARGIN + c * CELL_SIZE + CELL_SIZE / 2;
+          const y = MARGIN / 2;
+          ctx.fillText(getYoko[c], x, y);
+        }
       }
       // 左側（行番号 1～9、右寄せ）
       ctx.textAlign = "right";
       for (let r = 0; r < BOARD_SIZE; r++) {
-        const x = MARGIN / 2 + 10;
-        const y = MARGIN + r * CELL_SIZE + CELL_SIZE / 2;
-        ctx.fillText(getTate[r], x, y);
+        if (currentPlayer == "gote") {
+          ctx.save();
+          const centerBX = MARGIN / 2 - 10;
+          const centerBY = MARGIN + r * CELL_SIZE + CELL_SIZE/2;
+          ctx.translate(centerBX, centerBY);
+          ctx.rotate(Math.PI);
+          ctx.fillText(getTate[r], 0, 0);
+          ctx.restore();
+        } else {
+          const x = MARGIN * 3 / 2 + 10 + BOARD_SIZE * CELL_SIZE;
+          const y = MARGIN + r * CELL_SIZE + CELL_SIZE / 2;
+          ctx.fillText(getTate[r], x, y);
+        }
       }
+
+      // 回転状態なら復元
+      if (currentPlayer === "gote") {
+        ctx.restore();
+      }
+      displayTurn();
     }
 
     // クリックされたセルの駒情報をサーバーへ送信して有効移動先を取得する関数
@@ -251,6 +419,7 @@
           document.getElementById("info").innerText =
             `${cell.piece_type} (${cell.player}) の有効移動先: ${JSON.stringify(validMoves)}`;
           drawBoard();
+          displayTurn();
         })
         .catch(err => {
           console.error(err);
@@ -261,13 +430,31 @@
     function movePiece(destRow, destCol) {
       if (!selectedCell) return;
       const [srcRow, srcCol] = selectedCell;
-      // 移動要求のデータ
+      const cell = board[srcRow][srcCol];
+
+      // プロモーション判定: PROMOTABLE_PIECES に該当し、かつ移動元または移動先がプロモーションゾーンなら
+      let promotionPossible = false;
+      const promotablePieces = ['pawn', 'lance', 'knight', 'silver', 'bishop', 'rook'];
+      if (promotablePieces.includes(cell.piece_type) && cell.is_promoted === false) {
+        const isSrcInZone = (cell.player === "sente" ? (srcRow <= 2) : (srcRow >= 6));
+        const isDestInZone = (cell.player === "sente" ? (destRow <= 2) : (destRow >= 6));
+        promotionPossible = isSrcInZone || isDestInZone;
+      }
+
+      // もしプロモーション可能なら、ユーザーに確認（confirmダイアログなどで）：
+      let promote = false;
+      if (promotionPossible && cell.is_promoted === false) {
+        promote = confirm("この駒を成りますか？\n「OK」で成る、「キャンセル」で成らない");
+      }
+
+
       const data = {
         match_id: matchId,
         src_row: srcRow,
         src_col: srcCol,
         dest_row: destRow,
-        dest_col: destCol
+        dest_col: destCol,
+        promote: promote ? "1" : "0"
       };
 
       fetch('/api/move_piece/', {
@@ -285,16 +472,26 @@
         } else {
           // サーバー側で更新された盤面情報で board を更新
           board.splice(0, board.length, ...result.board);
+          turn = result.turn;
+          lastMove = [destRow, destCol];
           document.getElementById("info").innerText = "駒が移動しました。";
           selectedCell = null;
           validMoves = [];
           drawBoard();
+          displayTurn();
           // 持ち駒情報も更新される場合は piecesInHand を更新
           if (result.pieces_in_hand) {
             // 例: 更新された持ち駒情報で再表示
             piecesInHand.sente = result.pieces_in_hand.sente;
             piecesInHand.gote = result.pieces_in_hand.gote;
             displayPiecesInHand();
+          }
+          // ゲーム終了チェック
+          if (result.game_over === true) {
+            document.getElementById("info").innerText = "詰み成立！ " +
+              (result.winner === "sente" ? "先手の勝ち" : "後手の勝ち") + "です。";
+            // ゲーム終了後は以降のクリック操作を無効化する
+            canvas.style.pointerEvents = "none";
           }
         }
       })
@@ -313,7 +510,7 @@
         dest_col: destCol
       };
 
-      fetch('/matches/drop_piece/', {
+      fetch('/api/drop_piece/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -328,6 +525,8 @@
         } else {
           board.splice(0, board.length, ...result.board);
           document.getElementById("info").innerText = "持ち駒から打ちました。";
+          turn = result.turn;
+          lastMove = [destRow, destCol];
           // 持ち駒情報の更新があれば更新
           if (result.pieces_in_hand) {
             //piecesInHand.sente = result.pieces_in_hand.sente;
@@ -336,6 +535,14 @@
             displayPiecesInHand();
           }
           drawBoard();
+          displayTurn();
+          // ゲーム終了チェック
+          if (result.game_over === true) {
+            document.getElementById("info").innerText = "詰み成立！ " +
+              (result.winner === "sente" ? "先手の勝ち" : "後手の勝ち") + "です。";
+            // ゲーム終了後は以降のクリック操作を無効化する
+            canvas.style.pointerEvents = "none";
+          }
         }
       })
       .catch(err => {
@@ -343,51 +550,6 @@
         document.getElementById("info").innerText = "ドロップ要求の送信に失敗しました。";
       });
     }
-
-  function displayPiecesInHand() {
-      const senteHand = document.getElementById("handSente");
-      const goteHand = document.getElementById("handGote");
-      senteHand.innerHTML = "";
-      goteHand.innerHTML = "";
-
-      function createHandPiece(pieceType, count, player) {
-          if (count > 0) {
-              const pieceElement = document.createElement("div");
-              pieceElement.innerText = pieceDisplay[pieceType][false] || pieceDisplay[pieceType]; // 駒の表示
-              pieceElement.classList.add("hand-piece");
-              if (selectedPieceFromHand === pieceType && selectedPlayer === player) {
-                  pieceElement.classList.add("selected");
-              }
-              pieceElement.onclick = () => {
-                  if (selectedPieceFromHand === pieceType && selectedPlayer === player) {
-                      selectedPieceFromHand = null; // クリックで選択解除
-                      selectedPlayer = null;
-                  } else {
-                      selectedPieceFromHand = pieceType; // 選択
-                      selectedPlayer = player;
-                  }
-                  displayPiecesInHand();
-              };
-
-              pieceElement.setAttribute("data-piece", pieceType);
-              pieceElement.setAttribute("data-player", player);
-              pieceElement.setAttribute("data-count", count);
-              pieceElement.innerText += ` (${count})`; // 持ち駒の個数表示
-              return pieceElement;
-          }
-          return null;
-      }
-
-      Object.entries(piecesInHand.sente).forEach(([pieceType, count]) => {
-          const pieceElement = createHandPiece(pieceType, count, "sente");
-          if (pieceElement) senteHand.appendChild(pieceElement);
-      });
-
-      Object.entries(piecesInHand.gote).forEach(([pieceType, count]) => {
-          const pieceElement = createHandPiece(pieceType, count, "gote");
-          if (pieceElement) goteHand.appendChild(pieceElement);
-      });
-  }
 
   function handleBoardClick(row, col) {
       if (selectedPieceFromHand) {
@@ -400,10 +562,23 @@
       }
   }
 
-  canvas.addEventListener("click", function(event) {
+  // canvas.addEventListener("click", function(event) {
+  function boardClickHandler(event) {
+    if (gameOver) {
+      // ゲーム終了後は操作を無視する
+      return;
+    }
+
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    let x = event.clientX - rect.left;
+    let y = event.clientY - rect.top;
+
+    // 後手視点の場合、クリック座標を反転（180度回転の逆変換）
+    if (currentPlayer === "gote") {
+      x = canvas.width - x;
+      y = canvas.height - y;
+    }
+
     const col = Math.floor((x - MARGIN) / CELL_SIZE);
     const row = Math.floor((y - MARGIN) / CELL_SIZE);
     if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
@@ -419,6 +594,8 @@
         selectedPieceFromHand = null;
       }
       drawBoard();
+      displayTurn();
+      displayPiecesInHand();
       return;
     }
 
@@ -432,6 +609,7 @@
         selectedCell = null;
         validMoves = [];
         drawBoard();
+        displayTurn();
         return;
       } else {
         // クリックしたセルが有効移動先でない場合、
@@ -444,6 +622,7 @@
           selectedCell = null;
           validMoves = [];
           drawBoard();
+          displayTurn();
         }
         return;
       }
@@ -458,11 +637,101 @@
         drawBoard();
       }
     }
-  });
+  }
 
     drawBoard();
     displayPiecesInHand();
     displayTurn();
+
+// WebSocket の URL を設定（match_id を利用）
+const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+const gameSocket = new WebSocket(
+  wsScheme + '://' + window.location.host + '/ws/matches/' + matchId + '/'
+);
+
+// 盤面クリックイベントリスナーの登録
+canvas.addEventListener("click", boardClickHandler);
+
+gameSocket.onmessage = function(e) {
+  const data = JSON.parse(e.data);
+  console.log(data.action);
+  console.log(data.last_move);
+
+  // サーバーからの更新メッセージに基づいて盤面や持ち駒、手番を更新
+  if (data.action === 'move_piece' || data.action === 'drop_piece') {
+    board.splice(0, board.length, ...data.board);
+    turn = data.turn;
+    lastMove = data.last_move;
+    if (data.pieces_in_hand) {
+      Object.assign(piecesInHand, data.pieces_in_hand);
+      displayPiecesInHand();
+    }
+    drawBoard();
+    displayTurn();
+  }
+  // 詰みやその他対局終了のメッセージの場合
+  if (data.game_over === true) {
+    // 終了メッセージを表示（例：alertや画面上のinfoエリアに表示）
+    gameOver = true;
+    // const winner = data.winner;
+    let winner = data.winner === "sente" ? "先手" : "後手";
+    // document.getElementById("info").innerText = "対局終了！ 勝者は " + (winner === currentPlayer ? "あなた" : winner) + " です。";
+    document.getElementById("info").innerText = "対局終了！" + winner + (winner === currentPlayer ? "(あなた)" : "") + "の勝ちです。";
+    document.getElementById("matchStatus").innerText = "対局状態: " + winner + (winner === currentPlayer ? "(あなた)" : "") + "の勝ち";
+    
+    // 可能なら対局画面の操作を無効化する
+    // 例として、canvasのクリックイベントを解除する
+    canvas.removeEventListener("click", boardClickHandler);
+    
+    // WebSocketも閉じる（自動更新不要な場合）
+    gameSocket.close();
+    
+    return; // これ以降の処理は行わない
+  }
+
+};
+
+gameSocket.onclose = function(e) {
+  console.error('WebSocket closed unexpectedly');
+};
+
   </script>
+<script>
+  // 投了ボタンのクリックイベント
+  document.getElementById("resignButton").addEventListener("click", function() {
+    if (!confirm("本当に投了しますか？")) {
+      return;
+    }
+    
+    const data = { match_id: matchId }; // matchId はテンプレート変数等で定義済みとする
+    fetch('/board/resign/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+      if (result.error) {
+        document.getElementById("info").innerText = "投了に失敗しました: " + result.error;
+      } else {
+        document.getElementById("info").innerText = result.message + " 勝者: " + (result.winner === currentPlayer ? "あなた" : (result.winner === "sente" ? "先手" : "後手"));
+        // 必要なら、画面操作を無効化する
+        gameOver = true;
+        // 例: canvas のクリックイベントを解除するなど
+        canvas.removeEventListener("click", boardClickHandler);
+        // WebSocket 接続も閉じる場合
+        gameSocket.close();
+      }
+    })
+    .catch(err => {
+      console.error(err);
+      document.getElementById("info").innerText = "投了要求の送信に失敗しました。";
+    });
+  });
+
+</script>
 </body>
 </html>

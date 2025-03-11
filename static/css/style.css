@@ -36,6 +36,11 @@ header h1 {
     color: #007bff;
 }
 
+/* モバイル向けの追加スタイル（必要に応じて調整） */
+.navbar-brand {
+  font-size: 1.2rem;
+}
+
 /* メインコンテンツのスタイル */
 main {
     padding: 20px;
@@ -58,6 +63,26 @@ footer {
     main {
         padding: 15px;
     }
+}
+
+canvas {
+  border: 1px solid #000;
+  display: block;
+  margin: 0 auto;
+}
+
+/* 対局中のユーザー名、手番、情報表示エリアのスタイル */
+#playersInfo, #turnInfo, #info, .hand {
+  margin-top: 10px;
+  font-family: Arial, sans-serif;
+  text-align: center;
+}
+
+.hand {
+  border: 1px solid #333;
+  padding: 5px;
+  width: 400px;
+  margin: 10px auto;
 }
 
 .hand-piece {
