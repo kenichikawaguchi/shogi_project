@@ -44,20 +44,7 @@
   </nav>
 
   <div class="container my-3">
-    <h1 class="text-center">対局ID: {{ match.id }}</h1>
-      <!-- 対局ID と 対局ステータスの表示 -->
-      <div class="d-flex justify-content-between align-items-center">
-        <div>
-          <h2>対局ID: {{ match.id }}</h2>
-          <p class="mb-0">先手: {{ match.player1.username }}</p>
-          <p class="mb-0">後手: {% if match.player2 %}{{ match.player2.username }}{% else %}未割当{% endif %}</p>
-        </div>
-        <div id="matchStatus">
-          <div class="alert alert-info mb-0">
-            対局状態: {{ match.result }}
-          </div>
-        </div>
-      </div>
+    <h1 class="text-center">対局ID: {{ match.id }} {{ match.result }}</h1>
 
     <!-- 現在の手番表示エリア -->
     <h2 id="turnInfo" class="mb-3"></h2>
