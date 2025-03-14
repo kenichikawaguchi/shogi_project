@@ -17,7 +17,7 @@
       {% if user.is_authenticated %}
         <a href="{% url 'new_match' %}" class="btn btn-primary btn-lg">新たな対局を開始する</a>
       {% else %}
-        <a href="#" class="btn btn-primary btn-lg disabled" tabindex="-1" aria-disabled="true">新たな対局を開始する</a>
+        <a href="#" class="btn btn-primary btn-lg disabled" tabindex="-1" aria-disabled="true">新たな対局を開始する(ログインが必要)</a>
       {% endif %}
     </div>
 
