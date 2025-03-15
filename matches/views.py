@@ -584,11 +584,15 @@ def drop_piece(request):
 
     # まず、移動をシミュレーションした盤面を作成
     simulated_board = copy.deepcopy(board)
-    simulated_board[dest_row][dest_col] = moving_piece
+    simulated_board[dest_row][dest_col] = {
+        "player": player,
+        "piece_type": piece_type,
+        "is_promoted": False
+    }
     simulated_board[src_row][src_col] = None
 
     # シミュレーション後、自分の王がチェック状態になっているか判定
-    if is_in_check(simulated_board, moving_piece["player"]):
+    if is_in_check(simulated_board, player):
         return JsonResponse({'error': 'その指し手は自分の王が捕獲されるため不正です。'}, status=400)
 
     # 持ち駒から該当駒を1個減らす
