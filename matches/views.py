@@ -3,7 +3,7 @@ import datetime
 from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
-from .models import Match, GameState
+from .models import Match, GameState, Move
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 
@@ -13,6 +13,7 @@ from asgiref.sync import async_to_sync
 from django.db.models import Q
 
 from django.utils import timezone
+from .utils import perform_undo_move
 
 
 # 初期盤面状態を返す関数
@@ -250,6 +251,8 @@ def resign_match(request):
 
     match.end_time = timezone.now()
     match.save()
+    print("match__result")
+    print(match.result)
 
     # WebSocketブロードキャスト
     channel_layer = get_channel_layer()
@@ -473,6 +476,27 @@ def move_piece(request):
     game_state.board = board
     game_state.save()
 
+    # 【追加】Move モデルに指し手を記録する処理
+    # 現在の対局の手数は、既存の Move オブジェクトの件数 + 1 とします。
+    move_count = match.moves.count()  # Move は related_name='moves' でアクセス可能
+    move_number = move_count + 1
+
+    move_data = {
+        "src": [src_row, src_col],
+        "dest": [dest_row, dest_col],
+        "piece_type": moving_piece["piece_type"],
+        "is_promoted": moving_piece["is_promoted"],
+        "promote_flag": promote_flag,
+    }
+    Move.objects.create(
+        match=match,
+        player=request.user,
+        move_data=move_data,
+        move_number=move_number  # 追加：対局の何手目かを記録
+    )
+    # 【追加ここまで】
+
+
     # チャンネルレイヤーを取得し、グループにブロードキャスト
     channel_layer = get_channel_layer()
     print(f'channel_layer:  {channel_layer}')
@@ -630,6 +654,22 @@ def drop_piece(request):
     game_state.last_move = [dest_row, dest_col];
     game_state.board = board
     game_state.save()
+
+    # 【追加】Move モデルに打ち駒を記録する処理
+    move_count = match.moves.count()
+    move_number = move_count + 1
+    drop_move_data = {
+        "drop": True,                # ドロップであることを明示
+        "dest": [dest_row, dest_col],
+        "piece_type": piece_type,
+    }
+    Move.objects.create(
+        match=game_state.match,
+        player=request.user,
+        move_data=drop_move_data,
+        move_number=move_number
+    )
+    # 【追加ここまで】
 
     response_data = {
         'board': board,
@@ -813,4 +853,37 @@ def broadcast_match_list_update(user):
             }
         }
     )
+
+
+@require_POST
+@login_required
+def undo_move(request):
+    try:
+        data = json.loads(request.body)
+        match_id = int(data.get("match_id"))
+    except Exception:
+        return JsonResponse({"error": "パラメータが正しくありません。"}, status=400)
+
+    try:
+        new_state = perform_undo_move(match_id, request.user)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+    # WebSocket でブロードキャストして更新を通知
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"match_{match_id}",
+        {
+            "type": "game_update",
+            "message": {
+                "board": board,
+                "pieces_in_hand": game_state.pieces_in_hand,
+                "turn": game_state.turn,
+                "last_move": game_state.last_move,
+                "action": "undo_move"
+            }
+        }
+    )
+
+    return JsonResponse(new_state)
 

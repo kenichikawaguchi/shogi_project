@@ -78,11 +78,16 @@
     <!-- 操作情報表示 -->
     <div id="info"></div>
 
-    <!-- 手番切り替え用のボタンと表示エリア -->
+    <!-- 指手表示エリア -->
     <div class="text-center my-3">
-      <button id="togglePlayerButton" class="btn btn-secondary">プレイヤー切り替え</button>
       <span id="currentPlayerDisplay"></span>
     </div>
+
+{% comment %}
+    <button id="request-undo" class="btn btn-warning">待った</button>
+    <div id="undo-status"></div>
+{% endcomment %}
+
   </div>
 
   <!-- Bootstrap 5 JS（必要に応じて） -->
@@ -120,6 +125,8 @@
     let turn = '{{ turn }}'; // 現在の手番（"sente" または "gote"）
     // 現在のユーザーのプレイヤー側は board_view の際にサーバーで決定するか、クライアント側で判定する
     // ここでは currentPlayer として使います（例: ログインユーザーに応じて "sente" または "gote" を設定）
+    const currentUsername = "{{ user.username }}";
+
     let currentPlayer = '{{ current_player|default:"sente" }}';
 
  // 現在のプレイヤーを表示する関数
@@ -127,13 +134,6 @@
     const displayDiv = document.getElementById("currentPlayerDisplay");
     displayDiv.innerText = "現在のプレイヤー: " + (currentPlayer === "sente" ? "先手" : "後手");
   }
-  document.getElementById("togglePlayerButton").addEventListener("click", function() {
-    currentPlayer = currentPlayer === "sente" ? "gote" : "sente";
-    updateCurrentPlayerDisplay();
-    drawBoard();
-    displayPiecesInHand();
-  });
-
 
   // 初期表示更新
   updateCurrentPlayerDisplay();
@@ -302,8 +302,6 @@
           const y = MARGIN + r * CELL_SIZE;
           let fontColor = "black";
           // 有効移動先なら黄色、通常は白
-          console.log("lastmove");
-          console.log(lastMove);
           if (lastMove && lastMove[0] === r && lastMove[1] === c ) {
             ctx.fillStyle = "#d4edda";
           } else if (selectedCell && selectedCell[0] === r && selectedCell[1] === c) {
@@ -638,8 +636,6 @@ canvas.addEventListener("click", boardClickHandler);
 
 gameSocket.onmessage = function(e) {
   const data = JSON.parse(e.data);
-  console.log(data.action);
-  console.log(data.last_move);
 
   // サーバーからの更新メッセージに基づいて盤面や持ち駒、手番を更新
   if (data.action === 'move_piece' || data.action === 'drop_piece') {
@@ -672,6 +668,23 @@ gameSocket.onmessage = function(e) {
     
     return; // これ以降の処理は行わない
   }
+
+  if (data.type === "undo_request") {
+    console.log(data);
+    if (data.sender !== currentUsername) { // 自分がリクエストした場合は表示しない
+      if (confirm(`${data.sender} が「待った」をリクエストしています。許可しますか？`)) {
+          gameSocket.send(JSON.stringify({ type: "undo_accepted" }));
+      } else {
+          gameSocket.send(JSON.stringify({ type: "undo_denied" }));
+      }
+    }
+  } else if (data.type === "undo_accepted") {
+      document.getElementById("undo-status").innerText = "待ったが承認されました。1手戻ります。";
+      location.reload(); // 盤面を更新
+  } else if (data.type === "undo_denied") {
+      document.getElementById("undo-status").innerText = "待ったは拒否されました。";
+  }
+
 
 };
 
@@ -716,6 +729,15 @@ gameSocket.onclose = function(e) {
     });
   });
 
+{% comment %}
+  document.getElementById("request-undo").addEventListener("click", function () {
+      gameSocket.send(JSON.stringify({
+          type: "undo_request",
+          sender: currentUsername
+      }));
+      document.getElementById("undo-status").innerText = "待ったをリクエストしました。";
+  });
+{% endcomment %}
 </script>
 </body>
 </html>
