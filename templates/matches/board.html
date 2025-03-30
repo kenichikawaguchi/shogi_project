@@ -758,6 +758,9 @@ gameSocket.onclose = function(e) {
       document.getElementById("undo-status").innerText = "待ったをリクエストしました。";
   });
   {% endif %}
+  setTimeout(function () {
+    location.reload();
+  }, 10000);
 </script>
 </body>
 </html>
