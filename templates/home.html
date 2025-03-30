@@ -11,11 +11,23 @@
       {% endif %}
   <div class="container mt-4">
     <div class="text-center mb-4">
-      <h1>将棋オンラインへようこそ！</h1>
+      <h1>将棋絆（しょうぎきずな）へようこそ！</h1>
       <p>対局相手とリアルタイムで将棋を楽しみましょう。</p>
       <!-- 対局開始ボタン。クリックすると new_match ビューへリダイレクト -->
       {% if user.is_authenticated %}
-        <a href="{% url 'new_match' %}" class="btn btn-primary btn-lg">新たな対局を開始する</a>
+      <form action="{% url 'new_match' %}" method="post" class="text-center">
+        {% csrf_token %}
+        <div class="d-flex justify-content-center mb-3 custom-checkbox">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="allow_undo" id="allowUndo">
+            <label class="form-check-label" for="allowUndo">
+              待ったを許可する
+            </label>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg">新たな対局を開始する</button>
+      </form>
+
       {% else %}
         <a href="#" class="btn btn-primary btn-lg disabled" tabindex="-1" aria-disabled="true">新たな対局を開始する(ログインが必要)</a>
       {% endif %}
@@ -27,10 +39,14 @@
         <div id="myMatchesList" class="list-group">
           {% if my_matches %}
             {% for match in my_matches %}
-              <a href="{% url 'board_view' match.id %}" class="list-group-item list-group-item-action">
+              <a href="{% url 'board_view' match.id %}" class="list-group-item list-group-item-action" id="match-{{ match.id }}">
                 <div class="d-flex w-100 justify-content-between">
                   <h5 class="mb-1">
-                    対局ID: {{ match.id }}<br>
+                    対局ID: {{ match.id }}
+                    <small class="text-muted">
+                      (待った: {% if match.allow_undo %}許可{% else %}不可{% endif %})
+                    </small>
+                    <br>
                     先手: {{ match.player1.username }}{% if match.player1.id == user.id %} (あなた){% endif %}
                     &nbsp;/&nbsp;
                     後手: {% if match.player2 %}{{ match.player2.username }}{% if match.player2.id == user.id %} (あなた){% endif %}{% else %}未割当{% endif %}
@@ -39,6 +55,11 @@
                 </div>
                 <p class="mb-1">状態: {{ match.result }}</p>
               </a>
+                {% if match.player1.id == user.id %}
+                <div class="col-md-4 mb-3">
+                  <a href="{% url 'delete_match' match.id %}" class="btn btn-sm btn-outline-danger">削除</a>
+                </div>
+                {% endif %}
             {% endfor %}
           {% else %}
             <p class="text-center">あなたの対局はありません。</p>
@@ -53,10 +74,14 @@
         <div class="list-group">
           {% for match in waiting_matches %}
             {% if user.is_authenticated %}
-              <a href="{% url 'join_match' match.id %}" class="list-group-item list-group-item-action">
+              <a href="{% url 'join_match' match.id %}" class="list-group-item list-group-item-action" id="match-{{ match.id }}">
                 <div class="d-flex w-100 justify-content-between">
                   <h5 class="mb-1">
-                    対局ID: {{ match.id }}<br>
+                    対局ID: {{ match.id }}
+                    <small class="text-muted">
+                      (待った: {% if match.allow_undo %}許可{% else %}不可{% endif %})
+                    </small>
+                    <br>
                     先手: {{ match.player1.username }}{% if match.player1.id == user.id %} (あなた){% endif %}
                     &nbsp;/&nbsp;
                     後手: 未割当
@@ -65,6 +90,11 @@
                 </div>
                 <p class="mb-1">状態: 対局待機中</p>
               </a>
+                {% if match.player1.id == user.id %}
+                <div class="col-md-4 mb-3">
+                  <a href="{% url 'delete_match' match.id %}" class="btn btn-sm btn-outline-danger">削除</a>
+                </div>
+                {% endif %}
             {% else %}
               <div class="list-group-item">
                 <div class="d-flex w-100 justify-content-between">
@@ -97,7 +127,17 @@
 
     matchListSocket.onmessage = function(e) {
       const data = JSON.parse(e.data);
-      if (data.action === "reload") {
+      console.log(`data:${data}`);
+      console.log(`data.type:${data.type}`);
+      console.log(`data.action:${data.action}`);
+      if (data.type === "match_deleted") {
+        const matchId = data.match_id;
+        // 例: DOM から該当の対局要素を削除する
+        const element = document.getElementById("match-" + matchId);
+        if (element) {
+          element.remove();
+        }
+      } else if (data.action === "reload") {
         location.reload();
       } else {
         updateMyMatches(data.my_matches);

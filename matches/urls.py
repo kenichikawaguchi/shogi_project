@@ -8,6 +8,6 @@ urlpatterns = [
     path('move_piece/', views.move_piece, name='move_piece'),
     path('drop_piece/', views.drop_piece, name='drop_piece'),
     path('resign/', views.resign_match, name='resign_match'),
-    # 例: 対局画面を表示するビューを追加する場合
+    path('delete_match/<int:match_id>/', views.delete_match, name='delete_match'),
 ]
 

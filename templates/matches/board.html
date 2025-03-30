@@ -13,8 +13,10 @@
 
 </head>
 <body>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/eruda/1.4.3/eruda.min.js"></script>
+{% comment %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/eruda/3.4.1/eruda.min.js"></script>
 <script>eruda.init();</script>
+{% endcomment %}
   <!-- レスポンシブなナビゲーションバー -->
   <nav class="navbar navbar-expand-lg navbar-light bg-light">
     <div class="container-fluid">
@@ -83,10 +85,10 @@
       <span id="currentPlayerDisplay"></span>
     </div>
 
-{% comment %}
+  {% if match.allow_undo %}
     <button id="request-undo" class="btn btn-warning">待った</button>
     <div id="undo-status"></div>
-{% endcomment %}
+  {% endif %}
 
   </div>
 
@@ -118,8 +120,8 @@
     let gameOver = false; // 対局終了フラグ
 
     // サンプル盤面（表示用）：各セルは null または {player, piece_type, is_promoted} のオブジェクト
-    const board = JSON.parse('{{ sample_board_json|escapejs }}');
-    const piecesInHand = JSON.parse('{{ pieces_in_hand_json|escapejs }}');
+    let board = JSON.parse('{{ sample_board_json|escapejs }}');
+    let piecesInHand = JSON.parse('{{ pieces_in_hand_json|escapejs }}');
     let lastMove = JSON.parse('{{ last_move|escapejs }}');
     const matchId = '{{ match_id }}';
     let turn = '{{ turn }}'; // 現在の手番（"sente" または "gote"）
@@ -637,8 +639,26 @@ canvas.addEventListener("click", boardClickHandler);
 gameSocket.onmessage = function(e) {
   const data = JSON.parse(e.data);
 
+  console.log("data.action: {data.action}")
+  if (data.action === "undo_move") {
+      // Undo が成功して、新しい局面情報が送られてきた場合
+      board = data.board;
+      piecesInHand = data.pieces_in_hand;
+      turn = data.turn;
+      lastMove = data.last_move;
+      // 画面更新関数を呼び出す
+      drawBoard();
+      displayPiecesInHand();
+      displayTurn();
+      document.getElementById("undo-status").innerText = "待ったが承認され、1手戻りました。";
+  }
+
   // サーバーからの更新メッセージに基づいて盤面や持ち駒、手番を更新
   if (data.action === 'move_piece' || data.action === 'drop_piece') {
+    // 新たな指し手更新があれば、待ったメッセージはクリアする
+    if(document.getElementById("undo-status")) {
+      document.getElementById("undo-status").innerText = "";
+    }
     board.splice(0, board.length, ...data.board);
     turn = data.turn;
     lastMove = data.last_move;
@@ -672,7 +692,7 @@ gameSocket.onmessage = function(e) {
   if (data.type === "undo_request") {
     console.log(data);
     if (data.sender !== currentUsername) { // 自分がリクエストした場合は表示しない
-      if (confirm(`${data.sender} が「待った」をリクエストしています。許可しますか？`)) {
+      if (confirm(`${data.sender} が「待った」をリクエストしています。許可しますか？OK:承認, キャンセル:否認`)) {
           gameSocket.send(JSON.stringify({ type: "undo_accepted" }));
       } else {
           gameSocket.send(JSON.stringify({ type: "undo_denied" }));
@@ -696,7 +716,7 @@ gameSocket.onclose = function(e) {
 <script>
   // 投了ボタンのクリックイベント
   document.getElementById("resignButton").addEventListener("click", function() {
-    if (!confirm("本当に投了しますか？")) {
+    if (!confirm("本当に投了しますか？OK:投了する, キャンセル:投了しない")) {
       return;
     }
     
@@ -729,7 +749,7 @@ gameSocket.onclose = function(e) {
     });
   });
 
-{% comment %}
+  {% if match.allow_undo %}
   document.getElementById("request-undo").addEventListener("click", function () {
       gameSocket.send(JSON.stringify({
           type: "undo_request",
@@ -737,7 +757,7 @@ gameSocket.onclose = function(e) {
       }));
       document.getElementById("undo-status").innerText = "待ったをリクエストしました。";
   });
-{% endcomment %}
+  {% endif %}
 </script>
 </body>
 </html>

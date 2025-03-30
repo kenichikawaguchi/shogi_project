@@ -2,6 +2,7 @@ import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from asgiref.sync import sync_to_async
 from .utils import perform_undo_move
+from .models import UndoRequest, Match
 
 
 class GameConsumer(AsyncWebsocketConsumer):
@@ -39,6 +40,8 @@ class GameConsumer(AsyncWebsocketConsumer):
             # ここでは、対局相手にのみ確認を促すため、
             # 自分がリクエストした場合は（sender == 自分のユーザー名）何もしない。
             print(f'sender:{sender}, username:{self.scope["user"].username}')
+            new_state = await sync_to_async(self.update_undo_request)(sender)
+            print(f'new_state:{new_state}')
             # グループ内全員に undo_request をブロードキャストする
             await self.channel_layer.group_send(
                 self.group_name,
@@ -50,14 +53,19 @@ class GameConsumer(AsyncWebsocketConsumer):
         elif message_type == "undo_accepted":
             # 待ったが承認された場合、サーバー側で Undo 処理を実行する
             print("undo_accepted!!!")
+            await sync_to_async(self.set_undo_status)("accepted")
+            # ここで、共通の Undo 処理関数を呼び出す例
+            new_state = await sync_to_async(perform_undo_move)(self.match_id, self.scope["user"], approved=True)
+
             try:
-                new_state = await sync_to_async(perform_undo_move)(self.match_id, self.scope["user"])
                 print(f'new_state:{new_state}')
                 await self.channel_layer.group_send(
                     self.group_name,
                     {
                         "type": "game_update",
                         "message": {
+                            "action": "undo_move",
+                            "status": "accepted",
                             "board": new_state["board"],
                             "pieces_in_hand": new_state["pieces_in_hand"],
                             "turn": new_state["turn"],
@@ -74,6 +82,7 @@ class GameConsumer(AsyncWebsocketConsumer):
                 }))
         elif message_type == "undo_denied":
             # 待ったが拒否された場合
+            await sync_to_async(self.set_undo_status)("denied")
             await self.channel_layer.group_send(
                 self.group_name,
                 {
@@ -89,6 +98,40 @@ class GameConsumer(AsyncWebsocketConsumer):
                     "message": data
                 }
             )
+
+    def update_undo_request(self, sender):
+        from .models import UndoRequest, Match
+        match = Match.objects.get(id=self.match_id)
+        try:
+            undo_req = match.undo_request
+            # 既にUndoRequestが存在する場合
+            if undo_req.status != "pending":
+                # 状態が accepted もしくは denied なら、新しいリクエストとしてリセットする
+                undo_req.requested_by = self.scope["user"]
+                undo_req.status = "pending"
+                undo_req.save()
+            else:
+                # すでに pending なら、リクエスト内容を上書きしてもよい
+                undo_req.requested_by = self.scope["user"]
+                undo_req.save()
+        except UndoRequest.DoesNotExist:
+            # UndoRequestが存在しなければ、新規作成
+            UndoRequest.objects.create(
+                match=match,
+                requested_by=self.scope["user"],
+                status="pending"
+            )
+
+
+    def set_undo_status(self, status):
+        from .models import UndoRequest, Match
+        match = Match.objects.get(id=self.match_id)
+        try:
+            undo_req = match.undo_request
+            undo_req.status = status
+            undo_req.save()
+        except UndoRequest.DoesNotExist:
+            pass
 
     # グループからのメッセージを受け取るハンドラ
     async def game_update(self, event):
@@ -136,6 +179,14 @@ class MatchListConsumer(AsyncWebsocketConsumer):
             self.group_name,
             self.channel_name
         )
+
+    async def match_deleted(self, event):
+        # 対局が削除された際のイベントをクライアントに送信
+        match_id = event.get("match_id")
+        await self.send(text_data=json.dumps({
+            "type": "match_deleted",
+            "match_id": match_id
+        }))
 
     # グループからの更新メッセージを受信した際のハンドラ
     async def send_update(self, event):

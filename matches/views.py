@@ -1,9 +1,9 @@
 import json, copy
 import datetime
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseForbidden
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
-from .models import Match, GameState, Move
+from .models import Match, GameState, Move, Match, UndoRequest
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 
@@ -68,32 +68,27 @@ def initial_pieces_in_hand():
 
 @login_required
 def new_match(request):
-    """
-    新規対局開始のためのビュー。
-    現在のユーザーを player1 として、新しい対局（Match）とゲーム状態（GameState）を作成し、
-    対局盤面表示ビュー（board_view）にリダイレクトします。
-    
-    ※ 実際の運用では、対局相手（player2）はマッチングなどで決定する必要がありますが、
-      ここではサンプルとして player2 も同じユーザーにしています。
-    """
-    user = request.user
-    match = Match.objects.create(
-        player1=user,
-        player2=None,  # サンプル用。実際は適切な対戦相手に置き換えます。
-        result='waiting'
-    )
-    
-    GameState.objects.create(
-        match=match,
-        board=initial_board(),
-        pieces_in_hand=initial_pieces_in_hand(),
-        turn='sente'
-    )
-    
-    # 新規対局の盤面表示ページへリダイレクト（match_id を URL パラメータで渡す）
-    # return redirect('board_view', match_id=match.id)
-    broadcast_match_list_update(user)
-    return redirect('home')
+    if request.method == "POST":
+        allow_undo = request.POST.get("allow_undo") == "on"
+        match = Match.objects.create(
+            player1=request.user,
+            player2=None,
+            result='waiting',
+            allow_undo=allow_undo
+        )
+        GameState.objects.create(
+            match=match,
+            board=initial_board(),
+            pieces_in_hand=initial_pieces_in_hand(),
+            turn='sente'
+        )
+        # 新規対局の盤面表示ページへリダイレクト（match_id を URL パラメータで渡す）
+        # return redirect('board_view', match_id=match.id)
+        broadcast_match_list_update(request.user)
+        return redirect('home')
+    else:
+        # GETの場合は、新規対局作成フォームを表示するなど
+        return redirect('home')
 
 # ----- ゲームロジックの実装 -----
 
@@ -309,6 +304,9 @@ def get_moves(request):
 def board_view(request, match_id):
     game_state = get_object_or_404(GameState, match_id=match_id)
     match = game_state.match
+    if match.is_deleted:
+        return render(request, 'matches/deleted_match.html', {'match_id': match_id})
+
     # 現在のユーザーがどちら側かを判定（例: player1 が先手）
     current_player = "sente" if request.user == match.player1 else "gote"
     context = {
@@ -360,7 +358,6 @@ def move_piece(request):
         src_col = int(data.get('src_col'))
         dest_row = int(data.get('dest_row'))
         dest_col = int(data.get('dest_col'))
-        # promote パラメータはオプション。文字列 "1" なら True、"0" なら False
         promote_flag = data.get('promote')
         if promote_flag is not None:
             promote = promote_flag == "1"
@@ -428,6 +425,8 @@ def move_piece(request):
         return JsonResponse({'error': 'その指し手は自分の王が捕獲されるため不正です。'}, status=400)
 
     # 敵駒があれば捕獲
+    move_data = {}
+    captured_info = None
     target_cell = board[dest_row][dest_col]
     game_over = False
     winner = None
@@ -443,12 +442,16 @@ def move_piece(request):
             game_over = True
         else:
             # 王以外の場合は、捕獲処理を通常通り行う
+            # 捕獲された駒は、Undo用にその情報を記録
+            captured_info = target_cell
+            # 同時に、捕獲された駒は持ち駒として加算される
             target_cell["is_promoted"] = False
             captured_piece_type = target_cell["piece_type"]
             capturing_player = moving_piece["player"]
             hand = game_state.pieces_in_hand.get(capturing_player, {})
             hand[captured_piece_type] = hand.get(captured_piece_type, 0) + 1
             game_state.pieces_in_hand[capturing_player] = hand
+        move_data["captured"] = captured_info
 
     board[dest_row][dest_col] = moving_piece
     board[src_row][src_col] = None
@@ -481,13 +484,14 @@ def move_piece(request):
     move_count = match.moves.count()  # Move は related_name='moves' でアクセス可能
     move_number = move_count + 1
 
-    move_data = {
+    # move_data に通常の情報を追加
+    move_data.update({
         "src": [src_row, src_col],
         "dest": [dest_row, dest_col],
         "piece_type": moving_piece["piece_type"],
         "is_promoted": moving_piece["is_promoted"],
         "promote_flag": promote_flag,
-    }
+    })
     Move.objects.create(
         match=match,
         player=request.user,
@@ -589,7 +593,7 @@ def drop_piece(request):
         }
         opponent = "gote" if player == "sente" else "sente"
         # ここで、相手側の詰み判定を行う
-        if is_checkmate(simulated_board, game_state.pieces_in_hand, opponent):
+        if is_checkmate(simulated_board, game_state.pieces_in_hand, opponent, game_state.match):
             return JsonResponse({'error': '打ち歩詰めは禁止されています。'}, status=400)
     # --- ここまで打ち歩詰めチェック ---
 
@@ -613,7 +617,6 @@ def drop_piece(request):
         "piece_type": piece_type,
         "is_promoted": False
     }
-    simulated_board[src_row][src_col] = None
 
     # シミュレーション後、自分の王がチェック状態になっているか判定
     if is_in_check(simulated_board, player):
@@ -656,7 +659,7 @@ def drop_piece(request):
     game_state.save()
 
     # 【追加】Move モデルに打ち駒を記録する処理
-    move_count = match.moves.count()
+    move_count = game_state.match.moves.count()
     move_number = move_count + 1
     drop_move_data = {
         "drop": True,                # ドロップであることを明示
@@ -797,10 +800,10 @@ def home(request):
     トップページ（ホーム）ビュー
     待機中の対局ルーム（result='waiting'）の一覧を取得して表示する。
     """
-    waiting_matches = Match.objects.filter(result='waiting').order_by('-start_time')
+    waiting_matches = Match.objects.filter(result='waiting', is_deleted=False).order_by('-start_time')
     my_matches = []
     if request.user.is_authenticated:
-        my_matches = Match.objects.filter(result='ongoing').filter(Q(player1=request.user) | Q(player2=request.user)).order_by('-start_time')
+        my_matches = Match.objects.filter(result='ongoing', is_deleted=False).filter(Q(player1=request.user) | Q(player2=request.user)).order_by('-start_time')
     context = {
         'waiting_matches': waiting_matches,
         'my_matches': my_matches,
@@ -864,26 +867,47 @@ def undo_move(request):
     except Exception:
         return JsonResponse({"error": "パラメータが正しくありません。"}, status=400)
 
+    match = get_object_or_404(Match, id=match_id)
+    if not match.allow_undo:
+        return JsonResponse({"error": "この対局では待った機能が許可されていません。"}, status=400)
+
     try:
         new_state = perform_undo_move(match_id, request.user)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
 
-    # WebSocket でブロードキャストして更新を通知
+    # UndoRequest があれば、状態を accepted に更新
+    try:
+        undo_req = match.undo_request
+        undo_req.status = "accepted"
+        undo_req.save()
+    except UndoRequest.DoesNotExist:
+        pass
+
+    return JsonResponse(new_state)
+
+
+@login_required
+def delete_match(request, match_id):
+    match = get_object_or_404(Match, id=match_id)
+    # player1 でなければ論理削除できない
+    if request.user != match.player1:
+        return HttpResponseForbidden("対局作成者のみ削除できます。")
+
+    # 論理削除：is_deleted を True にする
+    match.is_deleted = True
+    match.save()
+
+    # WebSocket で削除された旨をブロードキャスト
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
-        f"match_{match_id}",
+        "match_list",  # 例：全対局一覧を管理するグループ名
         {
-            "type": "game_update",
-            "message": {
-                "board": board,
-                "pieces_in_hand": game_state.pieces_in_hand,
-                "turn": game_state.turn,
-                "last_move": game_state.last_move,
-                "action": "undo_move"
-            }
+            "type": "match_deleted",
+            "match_id": match.id
         }
     )
 
-    return JsonResponse(new_state)
+    # 必要に応じて、Home 画面にリダイレクトするなど
+    return redirect('home')
 

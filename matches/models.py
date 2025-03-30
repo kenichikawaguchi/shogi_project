@@ -8,6 +8,8 @@ from django.contrib.auth import get_user_model
 from accounts.models import CustomUser
 
 
+User = get_user_model()
+
 class Move(models.Model):
     """
     対局中の各指し手を記録するモデル。
@@ -73,6 +75,8 @@ class Match(models.Model):
         blank=True,
         verbose_name="対局終了時刻"
     )
+    # ここで待った機能が許可されるかどうかのフラグを追加（デフォルトは True）
+    allow_undo = models.BooleanField(default=True)
     
     # 任意: 盤面の状態をJSONなどで記録するフィールド
     board_state = models.TextField(
@@ -81,6 +85,7 @@ class Match(models.Model):
         verbose_name="盤面状態",
         help_text="盤面の状態をJSON形式などで保存（任意）"
     )
+    is_deleted = models.BooleanField(default=False)
     
     def __str__(self):
         return f"#{self.id}: {self.player1.username} vs {self.player2.username if self.player2 else '未割当'}"
@@ -113,4 +118,25 @@ class GameState(models.Model):
     def update_last_move(self, move):
         self.last_move = move
         self.save()
+
+
+class UndoRequest(models.Model):
+    """
+    待ったリクエストの状態を保存するモデル。
+    - match: 対局ルーム（Match）との 1対1 の関係。各対局で最大1件のUndoリクエストが存在する前提。
+    - requested_by: 待ったをリクエストしたプレイヤー。
+    - status: リクエストの状態。'pending'（未処理）、'accepted'（承認）、'denied'（拒否）
+    - timestamp: リクエストの時刻
+    """
+    match = models.OneToOneField('Match', on_delete=models.CASCADE, related_name='undo_request')
+    requested_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    status = models.CharField(max_length=10, choices=[
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('denied', 'Denied')
+    ], default='pending')
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"UndoRequest for Match {self.match.id} by {self.requested_by.username} ({self.status})"
 
