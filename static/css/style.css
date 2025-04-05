@@ -72,7 +72,7 @@ canvas {
 }
 
 /* 対局中のユーザー名、手番、情報表示エリアのスタイル */
-#playersInfo, #turnInfo, #info, .hand {
+#playersInfo, #playersInfo2, #turnInfo, #info, .hand {
   margin-top: 10px;
   font-family: Arial, sans-serif;
   text-align: center;

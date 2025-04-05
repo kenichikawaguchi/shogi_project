@@ -43,19 +43,14 @@
   </nav>
 
   <div class="container my-3">
-    <h1 class="text-center">対局ID: {{ match.id }} {{ match.result }}</h1>
-
-    <!-- 現在の手番表示エリア -->
-    <h2 id="turnInfo" class="mb-3"></h2>
-
       <!-- 対局中のユーザー名表示 -->
-    <div id="playersInfo" class="mb-3">
+    <h4 id="playersInfo" class="mb-3">
       {% if match.player2.id == current_user.id %}
         <p>先手: {{ match.player1.username }}{% if match.player1.id == current_user.id %} (あなた){% endif %}</p>
       {% else %}
         <p>後手: {{ match.player2.username }}{% if match.player2.id == current_user.id %} (あなた){% endif %}</p>
       {% endif %}
-    </div>
+    </h4>
     <!-- 持ち駒表示エリア：後手（gote） -->
     <div id="handGote" class="hand mb-3"></div>
     <!-- 左上に余白を確保するため、余白付きのCanvas -->
@@ -64,13 +59,13 @@
     <div id="handSente" class="hand mb-3"></div>
 
       <!-- 対局中のユーザー名表示 -->
-    <div id="playersInfo" class="mb-3">
+    <h4 id="playersInfo2" class="mb-3">
       {% if match.player2.id == current_user.id %}
         <p>後手: {{ match.player2.username }}{% if match.player2.id == current_user.id %} (あなた){% endif %}</p>
       {% else %}
         <p>先手: {{ match.player1.username }}{% if match.player1.id == current_user.id %} (あなた){% endif %}</p>
       {% endif %}
-    </div>
+    </h4>
 
 <!-- 例: 対局画面の適切な位置に投了ボタンを追加 -->
 <div class="text-center my-3">
@@ -195,9 +190,34 @@
 
     // 現在の手番を表示
     function displayTurn() {
-      const turnDiv = document.getElementById("turnInfo");
-      let turnText = turn === "sente" ? "先手の番" : "後手の番";
-      turnDiv.innerText = "手番: " + turnText;
+      const player1 = document.getElementById("playersInfo");
+      const player2 = document.getElementById("playersInfo2");
+      {% if match.player2.id == current_user.id %}
+        player1.innerText = "先手: {{ match.player1.username }}";
+        player2.innerText = "後手: {{ match.player2.username }}{% if match.player2.id == current_user.id %} (あなた){% endif %}";
+        if(turn === "gote"){
+          player2.innerText += " 手番";
+          player2.classList.add("text-info");
+          player1.classList.remove("text-info");
+        } else{
+          player1.innerText += " 手番";
+          player1.classList.add("text-info");
+          player2.classList.remove("text-info");
+        }
+      {% else %}
+        player1.innerText = "後手: {{ match.player2.username }}";
+        player2.innerText = "先手: {{ match.player1.username }}{% if match.player1.id == current_user.id %} (あなた){% endif %}";
+        if(turn === "sente"){
+          player2.innerText += " 手番";
+          player2.classList.add("text-info");
+          player1.classList.remove("text-info");
+        } else{
+          player1.innerText += " 手番";
+          player1.classList.add("text-info");
+          player2.classList.remove("text-info");
+        }
+      {% endif %}
+
     }
 
     // 持ち駒情報（例: { "sente": {"pawn": 2, "lance": 1, ...}, "gote": {"pawn": 1, ...} }）をHTMLに表示する関数
@@ -288,6 +308,18 @@
 
 
     function drawBoard() {
+      // canvas の実際の幅・高さを取得
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
+
+      // マージンを含めた描画可能領域を計算（例：上下左右20pxのマージン）
+      const margin = 40;
+      const drawWidth = canvasWidth - margin * 2;
+      const drawHeight = canvasHeight - margin * 2;
+
+      // 盤面が正方形（9x9）であると仮定
+      const cellSize = Math.min(drawWidth, drawHeight) / 9;
+
       if (currentPlayer === "gote") {
         ctx.save();
         ctx.translate(canvas.width/2, canvas.height/2);
@@ -300,8 +332,10 @@
       // 盤面セルの描画
       for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
-          const x = MARGIN + c * CELL_SIZE;
-          const y = MARGIN + r * CELL_SIZE;
+          // const x = MARGIN + c * CELL_SIZE;
+          // const y = MARGIN + r * CELL_SIZE;
+          const x = margin + c * cellSize;
+          const y = margin + r * cellSize;
           let fontColor = "black";
           // 有効移動先なら黄色、通常は白
           if (lastMove && lastMove[0] === r && lastMove[1] === c ) {
@@ -314,9 +348,9 @@
           } else {
             ctx.fillStyle = "white";
           }
-          ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+          ctx.fillRect(x, y, cellSize, cellSize);
           ctx.strokeStyle = "black";
-          ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+          ctx.strokeRect(x, y, cellSize, cellSize);
 
           // 駒がある場合、駒の種類の先頭文字で表示（senteは大文字、goteは小文字）
           const cell = board[r][c];
@@ -327,14 +361,14 @@
             ctx.textBaseline = "middle";
             if (cell.player == "gote") {
               ctx.save();
-              const centerX = x + CELL_SIZE/2;
-              const centerY = y + CELL_SIZE/2;
+              const centerX = x + cellSize/2;
+              const centerY = y + cellSize/2;
               ctx.translate(centerX, centerY);
               ctx.rotate(Math.PI);
               ctx.fillText(getPieceText(cell), 0, 0);
               ctx.restore();
             } else {
-              ctx.fillText(getPieceText(cell), x + CELL_SIZE / 2, y + CELL_SIZE / 2);
+              ctx.fillText(getPieceText(cell), x + cellSize / 2, y + cellSize / 2);
             }
           }
         }
@@ -349,15 +383,15 @@
       for (let c = 0; c < BOARD_SIZE; c++) {
         if (currentPlayer == "gote") {
           ctx.save();
-          const centerAX = MARGIN + c * CELL_SIZE + CELL_SIZE/2;
-          const centerAY = MARGIN * 3 / 2 + BOARD_SIZE * CELL_SIZE;
+          const centerAX = margin + c * cellSize + cellSize/2;
+          const centerAY = margin * 3 / 2 + BOARD_SIZE * cellSize;
           ctx.translate(centerAX, centerAY);
           ctx.rotate(Math.PI);
           ctx.fillText(getYoko[c], 0, 0);
           ctx.restore();
         } else {
-          const x = MARGIN + c * CELL_SIZE + CELL_SIZE / 2;
-          const y = MARGIN / 2;
+          const x = margin + c * cellSize + cellSize / 2;
+          const y = margin / 2;
           ctx.fillText(getYoko[c], x, y);
         }
       }
@@ -366,15 +400,15 @@
       for (let r = 0; r < BOARD_SIZE; r++) {
         if (currentPlayer == "gote") {
           ctx.save();
-          const centerBX = MARGIN / 2 - 10;
-          const centerBY = MARGIN + r * CELL_SIZE + CELL_SIZE/2;
+          const centerBX = margin / 2 - 10;
+          const centerBY = margin + r * cellSize + cellSize/2;
           ctx.translate(centerBX, centerBY);
           ctx.rotate(Math.PI);
           ctx.fillText(getTate[r], 0, 0);
           ctx.restore();
         } else {
-          const x = MARGIN * 3 / 2 + 10 + BOARD_SIZE * CELL_SIZE;
-          const y = MARGIN + r * CELL_SIZE + CELL_SIZE / 2;
+          const x = margin * 3 / 2 + 10 + BOARD_SIZE * cellSize;
+          const y = margin + r * cellSize + cellSize / 2;
           ctx.fillText(getTate[r], x, y);
         }
       }
@@ -548,6 +582,18 @@
 
   // canvas.addEventListener("click", function(event) {
   function boardClickHandler(event) {
+    // canvas の実際の幅・高さを取得
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+
+    // マージンを含めた描画可能領域を計算（例：上下左右20pxのマージン）
+    const margin = 40;
+    const drawWidth = canvasWidth - margin * 2;
+    const drawHeight = canvasHeight - margin * 2;
+
+    // 盤面が正方形（9x9）であると仮定
+    const cellSize = Math.min(drawWidth, drawHeight) / 9;
+
     if (gameOver) {
       // ゲーム終了後は操作を無視する
       return;
@@ -563,8 +609,10 @@
       y = canvas.height - y;
     }
 
-    const col = Math.floor((x - MARGIN) / CELL_SIZE);
-    const row = Math.floor((y - MARGIN) / CELL_SIZE);
+    // const col = Math.floor((x - MARGIN) / CELL_SIZE);
+    // const row = Math.floor((y - MARGIN) / CELL_SIZE);
+    const col = Math.floor((x - margin) / cellSize);
+    const row = Math.floor((y - margin) / cellSize);
     if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
 
     // もし持ち駒が選択されている場合
@@ -758,9 +806,46 @@ gameSocket.onclose = function(e) {
       document.getElementById("undo-status").innerText = "待ったをリクエストしました。";
   });
   {% endif %}
+{% comment %}
   setTimeout(function () {
     location.reload();
   }, 15000);
+{% endcomment %}
 </script>
+<script>
+  function resizeBoard() {
+    const canvas = document.getElementById("boardCanvas");
+    const parentWidth = canvas.parentElement.clientWidth;
+    // 画面幅の90%を新しいサイズとして設定
+    if (parentWidth < 500) {
+      const newSize = parentWidth * 0.9;
+
+      // canvasのwidthとheight属性を更新
+      canvas.width = newSize;
+      canvas.height = newSize;
+
+      handAreas = ["handGote", "handSente"];
+      for(let i = 0; i < handAreas.length; i ++){
+        const area = document.getElementById(handAreas[i]);
+        const parentWidth = area.parentElement.clientWidth;
+        // 画面幅の90%を新しいサイズとして設定
+        const newSize = parentWidth * 0.9;
+
+        const newSizeStr = String(newSize) + "px";
+        // canvasのwidthとheight属性を更新
+        area.style.setProperty('width', newSizeStr, 'important');
+      }
+      // 盤面の再描画関数（drawBoard）を呼び出して、最新サイズで再描画する
+      drawBoard();
+      displayPiecesInHand();
+    }
+  }
+
+  // ページロード時およびウィンドウリサイズ時に呼び出す
+  window.addEventListener("load", resizeBoard);
+  window.addEventListener("resize", resizeBoard);
+</script>
+{% comment %}
+{% endcomment %}
 </body>
 </html>
